@@ -95,9 +95,10 @@ def scan_destination(text: str, i: int) -> int | None:
     return i if depth == 0 else None
 
 
-def link_ref_def(ln: str) -> bool | None:
+def link_ref_def(ln: str) -> tuple[str, str, str | None] | None:
     """None unless `ln` is a COMPLETE link reference definition `[label]: destination ["title"]`;
-    otherwise True when it carries a title, False when a title may still follow on the next line.
+    otherwise (normalised label, destination, title) — title None when one may still follow on
+    the next line.
     The label needs a non-whitespace character and no unescaped brackets; the destination is
     `<…>` (no `<`, `>` inside) or a bare one with balanced parentheses; anything else after it
     makes the line prose."""
@@ -119,7 +120,13 @@ def link_ref_def(ln: str) -> bool | None:
     tm = _REF_TITLE_TAIL_RE.match(ln[end:])
     if not tm:
         return None
-    return tm.group("title") is not None
+    dest = ln[i + 1:end - 1] if ln[i] == "<" else ln[i:end]
+    return (ref_label(lm.group(1)), dest, tm.group("title"))
+
+
+def ref_label(label: str) -> str:
+    """A link label the way CommonMark matches it: case-folded, inner whitespace collapsed."""
+    return " ".join(label.casefold().split())
 
 
 def first_visible(lines: list[str]) -> str:
@@ -145,13 +152,17 @@ def first_visible(lines: list[str]) -> str:
         rd = link_ref_def(ln)
         if rd is not None:
             k += 1
-            if rd is False and k < len(lines) and REF_TITLE_RE.match(lines[k]):
+            if rd[2] is None and k < len(lines) and REF_TITLE_RE.match(lines[k]):
                 k += 1
             continue
         return ln
     return ""
 LINK_LABEL = r"\[(?:\\.|[^\]\\])+\]"                                          # allows escaped \] inside the label
+LINK_LABEL_RE = re.compile(r"\[((?:\\.|[^\[\]\\])+)\]")                          # every bracketed label candidate in prose
 LINK_OPEN_RE = re.compile(r"^" + LINK_LABEL + r"\(")                       # `[label](` — the destination is scanned by hand
+INLINE_TAG_RE = re.compile(   # a CommonMark inline open or closing tag (attributes included): raw HTML, not prose
+    r"<[A-Za-z][A-Za-z0-9-]*(?:[ \t]+[A-Za-z_:][A-Za-z0-9_.:-]*(?:[ \t]*=[ \t]*(?:[^ \t\"'=<>`]+|'[^']*'|\"[^\"]*\"))?)*[ \t]*/?>"
+    r"|</[A-Za-z][A-Za-z0-9-]*[ \t]*>")
 CONFIDENCE_RE = re.compile(r"(?<![A-Za-z0-9_])confidence ([0-9]{1,3})%(?![0-9%])")   # a standalone label: `overconfidence 80%` is not one
 ASCII_PUNCT = set(r"""!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~""")   # a backslash escapes exactly these (CommonMark)
 
@@ -186,7 +197,7 @@ def parse_source(text: str) -> tuple[str, int] | None:
     dest = text[j + 2:i]
     if not re.match(r"https?://[^ \t]+$", dest):
         return None
-    cm = CONFIDENCE_RE.search(text[i + 1:])
+    cm = CONFIDENCE_RE.search(INLINE_TAG_RE.sub(" ", text[i + 1:]))   # `<br title="confidence 80%">` is not a visible label
     return (dest, int(cm.group(1))) if cm else None
 DAY_H1_RE = re.compile(r"^# Lessons — ([0-9]{4}-[0-9]{2}-[0-9]{2})[ \t]*$")
 VERIFIED_NAME_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}_[a-z0-9-]+_v[0-9]+\.md$")
@@ -654,10 +665,18 @@ def sanitize(lines: list[str]) -> list[str]:
             inner = inner[qm.end():]
         return inner
 
-    def close_block() -> None:
+    def close_block(tail: str = "") -> None:
+        """Seal the open block's mark. A rendering block gets its text as payload; a non-rendering one
+        (comment, declaration, …) stays invisible unless raw text follows its terminator on the
+        closing line — CommonMark emits that line whole, so the tail is visible and the mark becomes
+        a rendering one carrying it."""
         nonlocal block_at
         if block_at >= 0:
-            out[block_at] += PAYLOAD_SEP + BLOCK_SEP.join(block_text)
+            if mark_kind(out[block_at]) == COMMENT_MARK:
+                if tail.strip(" \t"):
+                    out[block_at] = out[block_at].replace(COMMENT_MARK, HTML_MARK) + PAYLOAD_SEP + tail.strip(" \t")
+            else:
+                out[block_at] += PAYLOAD_SEP + BLOCK_SEP.join(block_text)
         block_at = -1
         block_text.clear()
 
@@ -705,7 +724,7 @@ def sanitize(lines: list[str]) -> list[str]:
                 block_text.append(inner if inner is not None else "")
                 if inner is not None and html_end in inner.lower():   # `</PRE>` closes a `<pre>` block too
                     in_html = False
-                    close_block()
+                    close_block(inner[inner.lower().index(html_end) + len(html_end):])
             out.append("")
             continue
         cont = False
@@ -720,6 +739,7 @@ def sanitize(lines: list[str]) -> list[str]:
         # Track which list items are still open: a non-blank line shallower than an
         # item's content column closes that item (and everything nested in it).
         lazy = False
+        new_item = False             # this line opened a list item: its content starts at `base` on this same line
         if not blank(ln) and not cont:
             # Judge "does this line start a block?" relative to the deepest container the
             # line's indent still satisfies (a `<!--` at column 0 under a column-4 field is a
@@ -736,6 +756,8 @@ def sanitize(lines: list[str]) -> list[str]:
                 li = LIST_ITEM_RE.match(ln[base:])   # a marker 4+ columns past the container is code, not a list item
                 if li and len(li.group(1)) <= 3 and not THEMATIC_RE.match(ln[base:]):
                     containers.append(base + content_col(li))
+                    in_paragraph = False         # the item's content begins a new block: a type-7 tag there opens an HTML block
+                    new_item = True
         base = containers[-1] if containers else 0
         if cont:
             scan, open_run = mask_code(ln, open_run, lines[k + 1:], containers)
@@ -747,8 +769,9 @@ def sanitize(lines: list[str]) -> list[str]:
         # never Markdown — a `## date` or `- Do:` inside it is not a heading or a field.
         # Openers are read inside the container AND inside any block-quote markers (`> ```` opens a
         # fence inside the quote); the block then lives at that quote depth.
-        qd, qinner = quote_depth(ln[base:]) if indent >= base else (0, "")
-        hb = html_block_start(qinner, in_paragraph) if indent >= base else None
+        in_container = indent >= base or new_item   # the opener line's content sits at `base` too (`- <sub>`, `- ````)
+        qd, qinner = quote_depth(ln[base:]) if in_container else (0, "")
+        hb = html_block_start(qinner, in_paragraph) if in_container else None
         if hb:
             mark, html_end = hb
             out.append(" " * indent + mark)
@@ -762,13 +785,18 @@ def sanitize(lines: list[str]) -> list[str]:
             else:
                 in_html = html_end not in rel.lower()[len(html_end) - 1:]   # e.g. `<!-- x -->` closes on its own line
             block_base, block_quote = base, qd
-            if mark == HTML_MARK:                    # a comment renders nothing: no payload to compare
-                block_at = len(out) - 1
+            block_at = len(out) - 1
+            if mark == HTML_MARK:
                 block_text.append(qinner.lstrip(" "))   # the opener's 0-3 spaces of indentation are not content
-                if not in_html:
-                    close_block()
+            if not in_html:                          # closed on its own line: any raw text after the terminator is visible
+                tail = ""
+                if html_end is not None:
+                    low = rel.lower()
+                    at = low.find(html_end, len(html_end) - 1 if html_end != ">" else 2)
+                    tail = rel[at + len(html_end):] if at >= 0 else ""
+                close_block(tail)
             continue
-        m = FENCE_RE.match(qinner) if indent >= base else None
+        m = FENCE_RE.match(qinner) if in_container else None
         # CommonMark: a backtick fence cannot open when its info string contains a
         # backtick (that line is an inline code span, not a fence); tilde fences may.
         if m and not (m.group(1)[0] == "`" and "`" in m.group(2)):
@@ -825,7 +853,7 @@ def parse_lessons(lines: list[str], *, presanitized: bool = False) -> tuple[dict
         # last  the open field's key; para  a paragraph is open (lazy continuation may follow);
         # pcol  the content column of the container that paragraph lives in (a Setext underline
         #       must sit there); tail  lesson-level prose after the fields — visible, so compared
-        return {"title": title, "why": "", "do": "", "source": "", "source_raw": "", "tail": "", "order": [],
+        return {"title": title, "why": "", "do": "", "source": "", "source_raw": "", "tail": "", "order": [], "refs": "",
                 "col": 2, "fcol": None, "last": None, "hard": False, "para": False, "pcol": 0, "pq": 0, "code": None,
                 "seen": {"why": False, "do": False, "source": False},
                 "problems": (["not-a-bold-lesson-bullet"] if malformed else [])}
@@ -876,6 +904,8 @@ def parse_lessons(lines: list[str], *, presanitized: bool = False) -> tuple[dict
     top_para: str | None = None   # the previous line, when it was a top-level paragraph line (a Setext underline may follow)
     quote_para: tuple[int, str] | None = None   # same, for a paragraph line inside a top-level block quote (depth, text)
     ref_title_next = False        # the previous line was a reference definition without a title: its title may follow
+    pending_label = ""            # …and this is its label
+    defs: dict[str, tuple[str, str | None]] = {}   # link reference definitions seen in this file: label → (destination, title)
     for idx, ln in enumerate(lines):
         prev_blank = blank(ln)
         prev_top_para, top_para = top_para, None
@@ -951,10 +981,12 @@ def parse_lessons(lines: list[str], *, presanitized: bool = False) -> tuple[dict
             # and link reference definitions (with a title on the next line when the definition has
             # none): a bullet, a paragraph, a thematic break, a code block — readers see it, no day file has it.
             if title_may_follow and REF_TITLE_RE.match(ln):
+                defs[pending_label] = (defs[pending_label][0], ln.strip(" \t"))
                 continue
             rd = link_ref_def(ln)
             if rd is not None:
-                ref_title_next = rd is False
+                defs.setdefault(rd[0], (rd[1], rd[2]))   # CommonMark: the first definition of a label wins
+                ref_title_next, pending_label = rd[2] is None, rd[0]
                 continue
             if not is_mark(ln) and not (idx == 0 and is_real_h1(ln)):
                 misplaced.append(ln.strip()[:60])
@@ -1011,10 +1043,12 @@ def parse_lessons(lines: list[str], *, presanitized: bool = False) -> tuple[dict
             # or a reference definition) it is visible content that no lesson — and no day file — holds.
             lesson = None
             if title_may_follow and REF_TITLE_RE.match(ln):
+                defs[pending_label] = (defs[pending_label][0], ln.strip(" \t"))
                 continue                          # the title of the reference definition on the line above
             rd = link_ref_def(ln)
             if rd is not None:
-                ref_title_next = rd is False
+                defs.setdefault(rd[0], (rd[1], rd[2]))
+                ref_title_next, pending_label = rd[2] is None, rd[0]
                 continue
             if mark_kind(ln) != COMMENT_MARK:
                 stray.append(mark_token(ln)[:60] if is_mark(ln) else ln.strip()[:60])
@@ -1092,6 +1126,12 @@ def parse_lessons(lines: list[str], *, presanitized: bool = False) -> tuple[dict
             # on one line and closes on a later one is seen whole and keeps its inner spaces.
             for k in ("title", "why", "do", "source_raw", "tail"):
                 l[k] = norm(l[k])
+            # Reference-style links resolve through the file's definitions, so a label used by the
+            # lesson carries its destination (and title) into the comparison; a label defined in one
+            # copy only, or defined differently, is a visible difference.
+            used = {ref_label(m.group(1)) for k in ("title", "why", "do", "source_raw", "tail")
+                    for m in LINK_LABEL_RE.finditer(l[k])}
+            l["refs"] = "; ".join(f"{lab}={defs[lab][0]} {defs[lab][1] or ''}".rstrip() for lab in sorted(used) if lab in defs)
             if "not-a-bold-lesson-bullet" in l["problems"]:
                 continue
             for k in FIELDS:
@@ -1115,11 +1155,11 @@ def shape_errors(sections: dict[str, list[dict]]) -> list[str]:
     return [f"{d}#{i}: {p}" for d, ls in sections.items() for i, l in enumerate(ls, 1) for p in l["problems"]]
 
 
-KEY_FIELDS = ("title",) + FIELDS + ("tail", "order")   # what two copies of a lesson are compared on
+KEY_FIELDS = ("title",) + FIELDS + ("tail", "order", "refs")   # what two copies of a lesson are compared on
 
 
-def lesson_key(l: dict) -> tuple[str, str, str, str, str, str]:
-    return (l["title"], l["why"], l["do"], l["source"], l["tail"], " ".join(l["order"]))
+def lesson_key(l: dict) -> tuple[str, str, str, str, str, str, str]:
+    return (l["title"], l["why"], l["do"], l["source"], l["tail"], " ".join(l["order"]), l["refs"])
 
 
 # --- knowledge.md ----------------------------------------------------------
