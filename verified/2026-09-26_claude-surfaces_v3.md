@@ -36,7 +36,7 @@ GitGuardian Security Checks · Kilo Code Review (glm-5.3) · Sourcery (no access
 
 ## Correction trail
 
-- v1 (commit `ef0c3ac`) labelled the session "Code tab" because T tapped **Code** on the where-does-this-chat-live tile by accident. He corrected it on 2026-09-27; v1 is kept with a superseded banner, this v2 carries the fix. The core finding is unchanged and now stronger: the chat/Cowork-tab session did everything natively.
+- v1 (commit `ef0c3ac`) labelled the session "Code tab" because T tapped **Code** on the where-does-this-chat-live tile by accident. He corrected it on 2026-09-27; v1 is kept with a superseded banner, and v2 carried the fix. The core finding is unchanged and now stronger: the chat/Cowork-tab session did everything natively.
 
 - v3 (2026-09-27): the proof repository was renamed to `cloud-launch-pad` at T's request; only the Proof artifact line changed.
 

@@ -72,10 +72,15 @@ MARKER_RE = re.compile(r"^[ \t]*(?:[-*+]|[0-9]{1,9}[.)])[ \t]*")
 WS = " \t\n\r\f"                                    # HTML/CommonMark whitespace; a NBSP is content
 SEP = "\ufffc"   # stands in for visible non-text inline content (code, image, displayed raw HTML): it splits words
 
-# Raw HTML a browser never displays. Each alternative also swallows an unterminated
-# opener to the end, because an unclosed comment hides everything after it.
-INVISIBLE_RE = re.compile(
-    r"<!--.*?(?:-->|\Z)|<\?.*?(?:\?>|\Z)|<!\[CDATA\[.*?(?:\]\]>|\Z)|<![A-Za-z][^>]*(?:>|\Z)", re.S)
+# Raw HTML a browser never displays, ended where a browser's HTML tokenizer ends it (checked in
+# Chromium 141): a comment at `-->` or `--!>` (`<!-->` and `<!--->` are complete, empty comments);
+# a processing instruction, declaration or CDATA section, all "bogus comments" in HTML content, at
+# the first `>`. An unterminated one hides everything to the end.
+INVISIBLE_RE = re.compile(r"<!--(?:-?>|.*?(?:--!?>|\Z))|<[!?][^>]*(?:>|\Z)", re.S)
+# Raw HTML that shows whitespace as written (textarea, xmp, listing, plaintext render as pre /
+# pre-wrap) or can make it so (a style element or attribute): a lesson holding any of it is
+# compared without whitespace normalization.
+WS_KEEP_RE = re.compile(r"<(?:textarea|xmp|listing|plaintext|style)\b|\bstyle\s*=", re.I)
 PROTECT_RE = re.compile(r"<pre\b.*?</pre>|<code\b.*?</code>", re.S | re.I)   # whitespace inside code is content
 BLOCK_TAG_RE = re.compile(
     r"[ \t\n\r\f]*(</?(?:address|article|aside|blockquote|br|dd|details|dialog|div|dl|dt|fieldset|figcaption|figure|"
@@ -184,7 +189,7 @@ class Doc:
                     m = opener.match(c)
                     if m:
                         end = end or f"</{m.group(1).lower()}>"
-                        if end not in c.lower()[2:]:
+                        if end not in c.lower():  # CommonMark tests the whole line: `<?>` and `<!-->` close at once
                             out.append("HTML comment never closes" if end == "-->" else f"HTML block never closes (no {end!r})")
                         break
         return out
@@ -204,6 +209,8 @@ def visible_html(html: str) -> str:
     """Rendered HTML reduced to what a reader can tell apart: invisible markup removed,
     whitespace collapsed outside <pre>/<code>, and dropped next to block boundaries."""
     html = INVISIBLE_RE.sub("", html)
+    if WS_KEEP_RE.search(html):                       # whitespace may be visible anywhere in it: compare exactly
+        return html.strip(WS)
     parts: list[str] = []
     i, after_pre = 0, False
     for m in PROTECT_RE.finditer(html):               # offsets index `html`, so it is never modified here
@@ -289,7 +296,7 @@ def parse_source(inline) -> int | None:
     if not re.match(r"https?://[^ \t]+$", toks[k].attrGet("href") or ""):
         return None
     close = next((j for j in range(k + 1, len(toks)) if toks[j].type == "link_close"), None)
-    if close is None:
+    if close is None or not visible_text(toks[k + 1:close]).strip(WS):   # the link needs a visible title
         return None
     m = CONFIDENCE_RE.search(visible_text(toks[close + 1:]))
     return int(m.group(1)) if m else None

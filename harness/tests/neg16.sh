@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -u
-SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"; W=$(mktemp -d); n=0; bad=0
+SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"; W=$(mktemp -d); trap 'rm -rf "$W"' EXIT; n=0; bad=0
+# Apply one case's mutation inside the copy. If any command in it fails, the copy's checker is replaced by a
+# stub that names the failure, so a case can never pass (or fail as expected) on an unmutated repo.
+mutate() { ( set -e; cd "$W/r"; "$1" ); local rc=$?
+  [ "$rc" -eq 0 ] || printf 'print("MUTATION DID NOT APPLY: %s (rc=%s)"); raise SystemExit(3)\n' "$1" "$rc" > "$W/r/harness/check-knowledge.py"; }
 split() { python3 -c "$1" knowledge.md; python3 -c "$2" lessons/2026-08-24.md; }   # different copies (round-22 rewrite)
 both() { for p in knowledge.md lessons/2026-08-24.md; do python3 -c "$1" "$p"; done; }
 INS='
@@ -10,7 +14,7 @@ i=next(k for k,l in enumerate(s) if l.startswith("## ") or l.startswith("# Lesso
 s[i+1:i+1]=[""]+LESSON
 open(p,"w").write("\n".join(s))
 '
-prep() { rm -rf "$W/r"; cp -r "$SRC" "$W/r"; rm -rf "$W/r/.git"; ( cd "$W/r" && "$1" ); }
+prep() { rm -rf "$W/r"; cp -r "$SRC" "$W/r"; rm -rf "$W/r/.git"; mutate "$1"; }
 run() { local name="$1" expect="$2"; n=$((n+1)); prep "$3"
   out=$(cd "$W/r" && python3 harness/check-knowledge.py 2>&1); rc=$?
   if [ $rc -ne 0 ] && printf '%s' "$out" | grep -qF -- "$expect"; then echo "PASS $name — FAIL fired: $(printf '%s' "$out" | grep -F -- "$expect" | head -1 | cut -c1-150)"

@@ -208,5 +208,45 @@
   "id": "image-splits-confidence",
   "markdown": "Source: [T](https://x.y) — A · confi![i](https://x.y/i.png)dence 80%\n",
   "why": "an image inside the confidence word"
+ },
+ {
+  "id": "empty-comment-inline",
+  "markdown": "y <!-->A\n",
+  "why": "`<!-->` is a complete inline comment (0.31.2); the text after it is prose"
+ },
+ {
+  "id": "empty-comment-block",
+  "markdown": "<!-->\ntext\n",
+  "why": "a type-2 HTML block that closes on its own line"
+ },
+ {
+  "id": "pi-block-minimal",
+  "markdown": "<?>\ntext\n",
+  "why": "a type-3 HTML block whose `?>` overlaps its opener closes on its own line"
+ },
+ {
+  "id": "cdata-with-gt-inline",
+  "markdown": "y <![CDATA[ a > b ]]>\n",
+  "why": "inline CDATA containing `>` is one raw HTML span"
+ },
+ {
+  "id": "comment-bang-close-inline",
+  "markdown": "y <!-- a --!>A -->\n",
+  "why": "CommonMark ends the inline comment at `-->`, past a `--!>`"
+ },
+ {
+  "id": "textarea-block",
+  "markdown": "<textarea>\na  b\n</textarea>\n",
+  "why": "a type-1 HTML block keeps its inner whitespace verbatim"
+ },
+ {
+  "id": "empty-link-label",
+  "markdown": "Source: [](https://x.y) — A\n",
+  "why": "an empty link text is still a link"
+ },
+ {
+  "id": "whitespace-link-label",
+  "markdown": "[ ](https://x.y)\n",
+  "why": "a whitespace-only link text is still a link"
  }
 ]
