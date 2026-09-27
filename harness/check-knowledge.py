@@ -38,20 +38,39 @@ RESULTS: list[dict] = []
 KNOWLEDGE_H1 = "# daily-dev-agentic knowledge — T agent"   # the connector depends on this exact line
 
 CODE_SPAN_RE = re.compile(r"(?<!\\)(`+)(?!`)(?:.+?)(?<!`)\1(?!`)")   # CommonMark-ish: matching, unescaped backtick runs
-DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-SECTION_RE = re.compile(r"^ {0,3}## (\d{4}-\d{2}-\d{2})\s*$")
+DATE_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+SECTION_RE = re.compile(r"^ {0,3}## ([0-9]{4}-[0-9]{2}-[0-9]{2})\s*$")
 LESSON_RE = re.compile(r"^ {0,3}-([ \t]+)\*\*(.+?)\*\*\s*$")     # bold lesson bullet: `-`, 1-4 columns of whitespace (checked after), **title**
-TOP_BULLET_RE = re.compile(r"^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:[ \t]+\S|\s*$)")   # any top-level list item incl. an EMPTY one; ordered markers are 1-9 digits (CommonMark)
-FIELD_LABEL_RE = re.compile(r"^\s*-[ \t](Why it matters here|Do|Source):(.*)$")   # label first, value validated after (nesting checked by indent)
+TOP_BULLET_RE = re.compile(r"^ {0,3}(?:[-*+]|[0-9]{1,9}[.)])(?:[ \t]+\S|\s*$)")   # any top-level list item incl. an EMPTY one; ordered markers are 1-9 digits (CommonMark)
+FIELD_LABEL_RE = re.compile(r"^( *)-([ \t]+)(Why it matters here|Do|Source):(.*)$")   # label first; 1-4 columns after `-` (5+ = code), nesting checked by indent
 # Blocks that interrupt a paragraph (CommonMark): an ATX heading, a block quote, a thematic break.
 # A line like this at top level is never lazy continuation of the lesson above it.
 THEMATIC_BREAK = r"(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$"   # 3+ of the SAME character (`- * -` is not a break)
 INTERRUPT_RE = re.compile(r"^ {0,3}(?:#{1,6}(?:[ \t]|$)|>|" + THEMATIC_BREAK + ")")
 ATX_RE = re.compile(r"^ {0,3}#{1,6}(?:[ \t]|$)")                                   # any ATX heading
 LINK_REF_DEF_RE = re.compile(r"^ {0,3}\[(?:\\.|[^\]\\])+\]:[ \t]*\S")          # `[label]: dest …` renders nothing
+REF_TITLE_RE = re.compile(r"""^[ \t]*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\((?:[^()\\]|\\.)*\))[ \t]*$""")   # a ref def's title alone on the next line
+
+
+def first_visible(lines: list[str]) -> str:
+    """The first line a reader sees as content: blank lines, block marks, link reference
+    definitions (and a definition's title on the following line) are skipped."""
+    k = 0
+    while k < len(lines):
+        ln = lines[k]
+        if not ln.strip() or is_mark(ln):
+            k += 1
+            continue
+        if LINK_REF_DEF_RE.match(ln):
+            k += 1
+            if k < len(lines) and REF_TITLE_RE.match(lines[k]):
+                k += 1
+            continue
+        return ln
+    return ""
 LINK_LABEL = r"\[(?:\\.|[^\]\\])+\]"                                          # allows escaped \] inside the label
 LINK_OPEN_RE = re.compile(r"^" + LINK_LABEL + r"\(")                       # `[label](` — the destination is scanned by hand
-CONFIDENCE_RE = re.compile(r"confidence (\d{1,3})%")
+CONFIDENCE_RE = re.compile(r"confidence ([0-9]{1,3})%")
 ASCII_PUNCT = set(r"""!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~""")   # a backslash escapes exactly these (CommonMark)
 
 
@@ -101,8 +120,8 @@ def parse_source(text: str) -> tuple[str, int] | None:
         return None
     cm = CONFIDENCE_RE.search(text[i + 1:])
     return (dest, int(cm.group(1))) if cm else None
-DAY_H1_RE = re.compile(r"^# Lessons — (\d{4}-\d{2}-\d{2})\s*$")
-VERIFIED_NAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_[a-z0-9-]+_v\d+\.md$")
+DAY_H1_RE = re.compile(r"^# Lessons — ([0-9]{4}-[0-9]{2}-[0-9]{2})\s*$")
+VERIFIED_NAME_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}_[a-z0-9-]+_v[0-9]+\.md$")
 H1_LINE_RE = re.compile(r"^ {0,3}#[ \t]+\S")   # a real ATX H1 with text: ≤3 leading spaces (4 = code), space or tab after `#`
 FIELDS = ("why", "do", "source")
 H2_RE = re.compile(r"^ {0,3}##(?:[ \t]|$)")   # any ATX H2 (≤3-space indent), including a bare `##`; NBSP is not a separator
@@ -144,6 +163,7 @@ def norm(s: str) -> str:
 
 
 HARD_BREAK = "⏎"   # joins two lines of a field when the first ends in a hard line break (2+ spaces or an odd backslash)
+PARA_BREAK = "¶"   # joins two paragraphs of the same field (a blank line between the field and its continuation)
 
 
 def ends_hard(ln: str) -> bool:
@@ -186,20 +206,20 @@ FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 FENCE_MARK = "\x00fence"       # left by sanitize() where a fenced block opened, at its indent: a block boundary, never text
 COMMENT_MARK = "\x00comment"   # same, where an HTML comment BLOCK (`<!--` at line start) opened
 CONT_MARK = "\x00cont"         # prefix: this line is paragraph continuation text (it began inside an inline comment)
-LIST_ITEM_RE = re.compile(r"^( *)([-*+]|\d{1,9}[.)])([ \t]+)\S")   # marker + whitespace + content (for content-column tracking)
+LIST_ITEM_RE = re.compile(r"^( *)([-*+]|[0-9]{1,9}[.)])([ \t]+)\S")   # marker + whitespace + content (for content-column tracking)
 THEMATIC_RE = re.compile(r"^ {0,3}" + THEMATIC_BREAK)                 # `---`, `- - -`, `***`: a thematic break outranks a list item
 _HTML6 = ("address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|"
           "fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|"
           "menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul")
 HTML_BLOCK_RE = re.compile(   # CommonMark HTML block starts that CAN interrupt a paragraph (types 1-6); type 7 cannot
-    r"^ {0,3}(?:<(?:script|pre|style|textarea)(?:\s|>|$)|<!--|<\?|<![A-Za-z]|<!\[CDATA\[|</?(?:" + _HTML6 + r")(?:\s|/?>|$))",
+    r"^ {0,3}(?:<(?:script|pre|style|textarea)(?:[ \t]|>|$)|<!--|<\?|<![A-Z]|<!\[CDATA\[|</?(?:" + _HTML6 + r")(?:[ \t]|/?>|$))",
     re.IGNORECASE)
 HTML_MARK = "\x00html"         # left by sanitize() where an HTML block other than a comment (types 1, 3-7) opened
 MARKS = (FENCE_MARK, COMMENT_MARK, HTML_MARK)
-_HTML_TYPE1 = re.compile(r"^ {0,3}<(script|pre|style|textarea)(?:\s|>|$)", re.IGNORECASE)
+_HTML_TYPE1 = re.compile(r"^ {0,3}<(script|pre|style|textarea)(?:[ \t]|>|$)", re.IGNORECASE)   # tag whitespace is space/tab only
 _HTML_TYPE7 = re.compile(   # a complete open or close tag alone on the line (cannot interrupt a paragraph)
-    r"^ {0,3}(?:<[A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?:\s*=\s*(?:[^\s\"'=<>`]+|'[^']*'|\"[^\"]*\"))?)*\s*/?>"
-    r"|</[A-Za-z][A-Za-z0-9-]*\s*>)\s*$")
+    r"^ {0,3}(?:<[A-Za-z][A-Za-z0-9-]*(?:[ \t]+[A-Za-z_:][A-Za-z0-9_.:-]*(?:[ \t]*=[ \t]*(?:[^ \t\"'=<>`]+|'[^']*'|\"[^\"]*\"))?)*[ \t]*/?>"
+    r"|</[A-Za-z][A-Za-z0-9-]*[ \t]*>)[ \t]*$")
 
 
 def html_block_start(rel: str, in_paragraph: bool) -> tuple[str, str | None] | None:
@@ -218,7 +238,7 @@ def html_block_start(rel: str, in_paragraph: bool) -> tuple[str, str | None] | N
         return HTML_MARK, "]]>"
     if re.match(r"^ {0,3}<![A-Z]", rel):         # uppercase only (CommonMark type 4); `<!foo>` is text
         return HTML_MARK, ">"
-    if re.match(r"^ {0,3}</?(?:" + _HTML6 + r")(?:\s|/?>|$)", rel, re.IGNORECASE):
+    if re.match(r"^ {0,3}</?(?:" + _HTML6 + r")(?:[ \t]|/?>|$)", rel, re.IGNORECASE):
         return HTML_MARK, None
     if not in_paragraph and _HTML_TYPE7.match(rel):
         return HTML_MARK, None
@@ -316,9 +336,22 @@ def fence_match(ln: str, base: int) -> re.Match | None:
     return FENCE_RE.match(ln[base:])
 
 
-def strip_inline_comments(ln: str, scan: str) -> str:
+def closes_in_paragraph(rest: list[str]) -> bool:
+    """True when `-->` appears in the following lines before the paragraph ends (a blank line).
+    CommonMark: raw HTML is inline, so an unclosed `<!--` whose closer never comes inside the
+    paragraph is just literal text, not a comment."""
+    for nxt in rest:
+        if not nxt.strip():
+            return False
+        if "-->" in nxt:
+            return True
+    return False
+
+
+def strip_inline_comments(ln: str, scan: str, rest: list[str] = ()) -> str:
     """Remove `<!-- … -->` spans from one prose line (`scan` is `ln` with code masked), carrying
-    an unterminated comment into the module-level `in_comment` flag via the caller."""
+    an unterminated comment into the module-level `_in_comment` flag when — and only when — its
+    closer arrives later in the same paragraph (`rest` = the lines that follow)."""
     global _in_comment
     buf: list[str] = []
     i = 0
@@ -335,6 +368,9 @@ def strip_inline_comments(ln: str, scan: str) -> str:
             j = scan.find("<!--", i)
             if j < 0:
                 buf.append(ln[i:])
+                i = len(scan)
+            elif "-->" not in scan[j + 4:] and not closes_in_paragraph(rest):
+                buf.append(ln[i:])                   # opener with no closer in this paragraph: literal text
                 i = len(scan)
             else:
                 buf.append(ln[i:j])
@@ -381,10 +417,11 @@ def sanitize(lines: list[str]) -> list[str]:
     open_run = 0                 # length of an inline-code backtick run still open from the previous line
     containers: list[int] = []   # content columns of the open list items, innermost last
     unclosed.clear()
-    for ln in lines:
+    for k, ln in enumerate(lines):
         ln = expand_lead(ln)
         if not ln.strip():
             open_run = 0             # a code span cannot cross a blank line (the paragraph ends)
+            _in_comment = False      # nor can an inline comment: an unclosed `<!--` was literal text
             in_paragraph = False
         if fence_char is not None:
             m = fence_match(ln, fence_base)
@@ -428,6 +465,7 @@ def sanitize(lines: list[str]) -> list[str]:
                 or ATX_RE.match(ln) or ln.lstrip(" ").startswith(">")
                 or fence_match(ln, eff) or html_block_start(ln[eff:], True))
             if not lazy:
+                open_run = 0         # a new block began: a backtick run left open in the previous paragraph was literal
                 while containers and indent < containers[-1]:
                     containers.pop()
                 if li and not THEMATIC_RE.match(ln) and (not in_paragraph or can_interrupt(li)):
@@ -435,7 +473,7 @@ def sanitize(lines: list[str]) -> list[str]:
         base = containers[-1] if containers else 0
         if cont:
             scan, open_run = mask_code(ln, open_run)
-            out.append(CONT_MARK + strip_inline_comments(ln, scan))
+            out.append(CONT_MARK + strip_inline_comments(ln, scan, lines[k + 1:]))
             in_paragraph = True
             continue
         # An HTML block (`<!--`, `<pre>`, `<div>`, … first on the line, relative to the open
@@ -467,7 +505,7 @@ def sanitize(lines: list[str]) -> list[str]:
         # Inline code spans are opaque: a <!-- inside `…` is code, not a comment opener.
         # Mask them (same length, harmless chars) for delimiter scanning; restore text after.
         scan, open_run = mask_code(ln, open_run)
-        prose = strip_inline_comments(ln, scan)
+        prose = strip_inline_comments(ln, scan, lines[k + 1:])
         in_paragraph = bool(prose.strip()) and not ATX_RE.match(prose) and not THEMATIC_RE.match(prose)
         out.append(prose)
     if fence_char is not None:
@@ -502,12 +540,13 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
                 "seen": {"why": False, "do": False, "source": False},
                 "problems": (["not-a-bold-lesson-bullet"] if malformed else [])}
 
-    def absorb(lesson: dict, ln: str) -> None:
+    def absorb(lesson: dict, ln: str, para: bool = False) -> None:
         """Continuation text belongs to the field above it — or to the title when no field
-        has started. A hard line break on the previous line is kept as HARD_BREAK so two
+        has started. A hard line break on the previous line is kept as HARD_BREAK, and a
+        blank line before this one (a new paragraph inside the item) as PARA_BREAK, so two
         copies that render differently never compare equal."""
         text = ln.strip()
-        sep = f" {HARD_BREAK} " if lesson["hard"] else " "
+        sep = f" {PARA_BREAK} " if para else (f" {HARD_BREAK} " if lesson["hard"] else " ")
         if lesson["last"] is not None:
             key = lesson["last"]
             if key == "source":
@@ -603,15 +642,20 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
             continue
         m = FIELD_LABEL_RE.match(ln)
         if m and indent >= lesson["col"] + 4:
-            lesson["problems"].append(f"field '{m.group(1)}' indented {indent} spaces renders as code, not a nested bullet")
+            lesson["problems"].append(f"field '{m.group(3)}' indented {indent} spaces renders as code, not a nested bullet")
+            lesson["last"] = None
+            continue
+        if m and gap_cols(indent + 1, m.group(2)) > 4:
+            lesson["problems"].append(f"field '{m.group(3)}' has {gap_cols(indent + 1, m.group(2))} columns after `-`: its text renders as code, not a field")
             lesson["last"] = None
             continue
         if not m:
-            # continuation text (indented) belongs to the field above it — or to the title
+            # continuation text (indented) belongs to the field above it — or to the title;
+            # after a blank line it is a NEW paragraph of that field, which is recorded
             if ln.strip():
-                absorb(lesson, ln)
+                absorb(lesson, ln, para=was_prev_blank)
             continue
-        label, value = m.group(1), m.group(2)
+        label, value = m.group(3), m.group(4)
         key = {"Why it matters here": "why", "Do": "do", "Source": "source"}[label]
         lesson["last"] = key
         lesson["hard"] = ends_hard(ln)
@@ -743,7 +787,7 @@ else:
             continue
         day_lines = sanitize(raw)
         problems: list[str] = list(unclosed)
-        first = next((ln for ln in day_lines if ln.strip() and not is_mark(ln) and not LINK_REF_DEF_RE.match(ln)), "")   # comments, code, ref defs skipped
+        first = first_visible(day_lines)   # comments, code and reference definitions are skipped, not counted
         hm = DAY_H1_RE.match(first)
         if not hm:
             problems.append(f"first visible line must be `# Lessons — {d}`, got {first[:40]!r}")
@@ -806,10 +850,7 @@ else:
         lines = read_lines(p)
         if lines is None:
             return None
-        for ln in sanitize(lines):
-            if ln.strip() and not is_mark(ln) and not LINK_REF_DEF_RE.match(ln):   # a `[x]: url` line renders nothing
-                return ln
-        return ""
+        return first_visible(sanitize(lines))
     firsts = {p.name: first_nonblank(p) for p in vfiles}
     noh1 = [n for n, f in firsts.items() if f is not None and not H1_LINE_RE.match(f)]
     if noh1:
