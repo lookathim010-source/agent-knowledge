@@ -77,6 +77,37 @@ def norm(s: str) -> str:
     return " ".join(s.split())
 
 
+def strip_html_comments(lines: list[str]) -> list[str]:
+    """Blank out everything inside <!-- ... --> so commented-out content never counts as present.
+
+    Line count is preserved (commented text becomes empty) so positions stay meaningful.
+    """
+    out: list[str] = []
+    in_comment = False
+    for ln in lines:
+        buf = []
+        i = 0
+        while i < len(ln):
+            if in_comment:
+                j = ln.find("-->", i)
+                if j < 0:
+                    i = len(ln)
+                else:
+                    in_comment = False
+                    i = j + 3
+            else:
+                j = ln.find("<!--", i)
+                if j < 0:
+                    buf.append(ln[i:])
+                    i = len(ln)
+                else:
+                    buf.append(ln[i:j])
+                    in_comment = True
+                    i = j + 4
+        out.append("".join(buf))
+    return out
+
+
 def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
     """Return ({date: [lesson]}, [duplicate dates]) for a knowledge-style file.
 
@@ -92,6 +123,7 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
     current: str | None = None
     lesson: dict | None = None
     bad_headings.clear()
+    lines = strip_html_comments(lines)
 
     def new_lesson(title: str, malformed: bool) -> dict:
         return {"title": norm(title), "why": "", "do": "", "source": "",
@@ -126,10 +158,16 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
         if lesson is None:
             continue
         if (m := WHY_RE.match(ln)):
+            if lesson["why"]:
+                lesson["problems"].append("duplicate why")
             lesson["why"] = norm(m.group(1))
         elif (m := DO_RE.match(ln)):
+            if lesson["do"]:
+                lesson["problems"].append("duplicate do")
             lesson["do"] = norm(m.group(1))
         elif (m := SOURCE_RE.match(ln)):
+            if lesson["source"] or any(pr.startswith("confidence") for pr in lesson["problems"]):
+                lesson["problems"].append("duplicate source")
             conf = int(m.group(1))
             if 0 <= conf <= 100:
                 lesson["source"] = norm(ln.strip()[2:])
