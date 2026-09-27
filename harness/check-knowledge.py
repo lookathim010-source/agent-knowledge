@@ -17,7 +17,8 @@ has the shape every reader relies on:
                  that day's section in knowledge.md, in the same order
   verified/      only regular files named YYYY-MM-DD_topic_vN.md (real dates)
                  whose first visible non-blank line is a real H1 (not indented 4+)
-  Text inside HTML comments or fenced code blocks never counts as content.
+  Text inside HTML comments, fenced code blocks or indented code blocks never
+  counts as content; a copy that turns prose into code (or back) is a difference.
 
 Contract: one line per check (PASS|WARN|FAIL name evidence), final RESULT
 line, exit 0 only when nothing FAILed. `--json` prints one JSON object.
@@ -50,22 +51,32 @@ INTERRUPT_RE = re.compile(r"^ {0,3}(?:#{1,6}(?:[ \t]|$)|>|" + THEMATIC_BREAK + "
 ATX_RE = re.compile(r"^ {0,3}#{1,6}(?:[ \t]|$)")                                   # any ATX heading
 _REF_TITLE = r"""(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\((?:[^()\\]|\\.)*\))"""
 LINK_REF_DEF_RE = re.compile(   # a COMPLETE `[label]: destination ["title"]` line — anything else after the destination is prose
-    r"^ {0,3}\[(?:\\.|[^\]\\])+\]:[ \t]*(?:<[^<>]*>|[^ \t<][^ \t]*)(?:[ \t]+" + _REF_TITLE + r")?[ \t]*$")
+    r"^ {0,3}\[(?:\\.|[^\]\\])+\]:[ \t]*(?:<[^<>]*>|[^ \t<][^ \t]*)(?:[ \t]+(?P<title>" + _REF_TITLE + r"))?[ \t]*$")
 REF_TITLE_RE = re.compile(r"^[ \t]*" + _REF_TITLE + r"[ \t]*$")   # a ref def's title alone on the next line
 
 
 def first_visible(lines: list[str]) -> str:
     """The first line a reader sees as content: blank lines, block marks, link reference
-    definitions (and a definition's title on the following line) are skipped."""
+    definitions (and, for a definition that has no title yet, its title on the following
+    line — a quoted line after a definition that already carries one is a paragraph) are
+    skipped. A continuation line (the prose after a multi-line inline comment's `-->`)
+    counts as visible only when it carries text."""
     k = 0
     while k < len(lines):
         ln = lines[k]
+        if ln.startswith(CONT_MARK):
+            tail = ln[len(CONT_MARK):]
+            if tail.strip():
+                return tail
+            k += 1
+            continue
         if not ln.strip() or is_mark(ln):
             k += 1
             continue
-        if LINK_REF_DEF_RE.match(ln):
+        rd = LINK_REF_DEF_RE.match(ln)
+        if rd:
             k += 1
-            if k < len(lines) and REF_TITLE_RE.match(lines[k]):
+            if rd.group("title") is None and k < len(lines) and REF_TITLE_RE.match(lines[k]):
                 k += 1
             continue
         return ln
@@ -214,9 +225,6 @@ THEMATIC_RE = re.compile(r"^ {0,3}" + THEMATIC_BREAK)                 # `---`, `
 _HTML6 = ("address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|"
           "fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|"
           "menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul")
-HTML_BLOCK_RE = re.compile(   # CommonMark HTML block starts that CAN interrupt a paragraph (types 1-6); type 7 cannot
-    r"^ {0,3}(?:<(?:script|pre|style|textarea)(?:[ \t]|>|$)|<!--|<\?|<![A-Z]|<!\[CDATA\[|</?(?:" + _HTML6 + r")(?:[ \t]|/?>|$))",
-    re.IGNORECASE)
 HTML_MARK = "\x00html"         # left by sanitize() where an HTML block other than a comment (types 1, 3-7) opened
 MARKS = (FENCE_MARK, COMMENT_MARK, HTML_MARK)
 _HTML_TYPE1 = re.compile(r"^ {0,3}<(script|pre|style|textarea)(?:[ \t]|>|$)", re.IGNORECASE)   # tag whitespace is space/tab only
@@ -246,7 +254,34 @@ def html_block_start(rel: str, in_paragraph: bool) -> tuple[str, str | None] | N
     if not in_paragraph and _HTML_TYPE7.match(rel):
         return HTML_MARK, None
     return None
-INNER_STRONG_RE = re.compile(r"(?<!\\)\*\*")                        # an unescaped ** inside a title: not ONE strong span
+
+
+def has_inner_strong(s: str) -> bool:
+    """True when `s` (a would-be title, code spans masked) holds a live `**`: one whose run of
+    preceding backslashes is EVEN (`\\**` is an escaped backslash and then a real delimiter,
+    `\**` is an escaped star). Every position is tested, so `\***` — an escaped star followed
+    by a live `**` — is caught too. A live `**` inside the title means it is not ONE strong span."""
+    for a in range(len(s) - 1):
+        if s[a] == "*" and s[a + 1] == "*" and (a - len(s[:a].rstrip("\\"))) % 2 == 0:
+            return True
+    return False
+
+
+def interrupts_paragraph(ln: str, eff: int) -> bool:
+    """CommonMark: can `ln` (leading tabs expanded), read inside the list item whose content
+    column is `eff`, interrupt a paragraph? An ATX heading, a thematic break, a block quote,
+    a fence, an HTML block of types 1-6 and a non-empty list item (an ordered one only when it
+    starts at 1) can; anything indented 4+ columns past `eff` cannot — indented code never
+    interrupts a paragraph, it is lazy continuation text there."""
+    rel = ln[eff:]
+    if len(rel) - len(rel.lstrip(" ")) > 3:
+        return False
+    li = LIST_ITEM_RE.match(rel)
+    fm = FENCE_RE.match(rel)
+    return bool(THEMATIC_RE.match(rel) or ATX_RE.match(rel) or rel.lstrip(" ").startswith(">")
+                or (li and can_interrupt(li))
+                or (fm and not (fm.group(1)[0] == "`" and "`" in fm.group(2)))
+                or html_block_start(rel, True))
 unclosed: list[str] = []   # filled by sanitize: a fence or comment still open at end of file
 
 
@@ -339,22 +374,30 @@ def fence_match(ln: str, base: int) -> re.Match | None:
     return FENCE_RE.match(ln[base:])
 
 
-def closes_in_paragraph(rest: list[str]) -> bool:
-    """True when `-->` appears in the following lines before the paragraph ends (a blank line).
-    CommonMark: raw HTML is inline, so an unclosed `<!--` whose closer never comes inside the
-    paragraph is just literal text, not a comment."""
+def closes_in_paragraph(rest: list[str], containers: list[int] = ()) -> bool:
+    """True when `-->` arrives on a later line of the SAME paragraph. CommonMark settles block
+    structure before inline HTML, so the paragraph ends at a blank line or at any line that
+    starts a block able to interrupt it — a heading, thematic break, block quote, fence, HTML
+    block, or a list item (a sibling `- Do:` included), judged against the deepest open list
+    item the line's indent satisfies. An opener whose closer lies beyond that is literal text."""
     for nxt in rest:
+        nxt = expand_lead(nxt)
         if not nxt.strip():
+            return False
+        indent = len(nxt) - len(nxt.lstrip(" "))
+        eff = next((c for c in reversed(containers) if c <= indent), 0)
+        if interrupts_paragraph(nxt, eff):
             return False
         if "-->" in nxt:
             return True
     return False
 
 
-def strip_inline_comments(ln: str, scan: str, rest: list[str] = ()) -> str:
+def strip_inline_comments(ln: str, scan: str, rest: list[str] = (), containers: list[int] = ()) -> str:
     """Remove `<!-- … -->` spans from one prose line (`scan` is `ln` with code masked), carrying
     an unterminated comment into the module-level `_in_comment` flag when — and only when — its
-    closer arrives later in the same paragraph (`rest` = the lines that follow)."""
+    closer arrives later in the same paragraph (`rest` = the lines that follow, `containers` =
+    the content columns of the list items open at this line)."""
     global _in_comment
     buf: list[str] = []
     i = 0
@@ -372,7 +415,7 @@ def strip_inline_comments(ln: str, scan: str, rest: list[str] = ()) -> str:
             if j < 0:
                 buf.append(ln[i:])
                 i = len(scan)
-            elif "-->" not in scan[j + 4:] and not closes_in_paragraph(rest):
+            elif "-->" not in scan[j + 4:] and not closes_in_paragraph(rest, containers):
                 buf.append(ln[i:])                   # opener with no closer in this paragraph: literal text
                 i = len(scan)
             else:
@@ -446,37 +489,35 @@ def sanitize(lines: list[str]) -> list[str]:
         if _in_comment:
             j = ln.find("-->")
             if j < 0:
-                out.append("")
+                out.append(CONT_MARK)    # wholly inside the inline comment: no text, but the paragraph is still open
                 continue
             _in_comment = False
             ln = ln[j + 3:]          # the rest of the line is prose again — but it did not BEGIN the
             cont = True              # line, so it can never start a block: it stays in the paragraph
         # Track which list items are still open: a non-blank line shallower than an
         # item's content column closes that item (and everything nested in it).
-        base = containers[-1] if containers else 0
+        lazy = False
         if ln.strip() and not cont:
             indent = len(ln) - len(ln.lstrip(" "))
-            # A lazy continuation (paragraph text that is none of the block starts) stays inside
-            # the open list item however shallow it is, so it must not pop the containers.
-            li = LIST_ITEM_RE.match(ln)
             # Judge "does this line start a block?" relative to the deepest container the
             # line's indent still satisfies (a `<!--` at column 0 under a column-4 field is a
-            # top-level HTML block, not paragraph text).
+            # top-level HTML block, not paragraph text). A lazy continuation (paragraph text
+            # that is none of the block starts) stays inside the open list item however
+            # shallow it is, so it must not pop the containers.
             eff = next((c for c in reversed(containers) if c <= indent), 0)
-            lazy = in_paragraph and not (
-                (li and not THEMATIC_RE.match(ln) and can_interrupt(li)) or THEMATIC_RE.match(ln)
-                or ATX_RE.match(ln) or ln.lstrip(" ").startswith(">")
-                or fence_match(ln, eff) or html_block_start(ln[eff:], True))
+            lazy = in_paragraph and not interrupts_paragraph(ln, eff)
             if not lazy:
                 open_run = 0         # a new block began: a backtick run left open in the previous paragraph was literal
                 while containers and indent < containers[-1]:
                     containers.pop()
-                if li and not THEMATIC_RE.match(ln) and (not in_paragraph or can_interrupt(li)):
-                    containers.append(content_col(li))
+                base = containers[-1] if containers else 0
+                li = LIST_ITEM_RE.match(ln[base:])   # a marker 4+ columns past the container is code, not a list item
+                if li and len(li.group(1)) <= 3 and not THEMATIC_RE.match(ln[base:]):
+                    containers.append(base + content_col(li))
         base = containers[-1] if containers else 0
         if cont:
             scan, open_run = mask_code(ln, open_run)
-            out.append(CONT_MARK + strip_inline_comments(ln, scan, lines[k + 1:]))
+            out.append(CONT_MARK + strip_inline_comments(ln, scan, lines[k + 1:], containers))
             in_paragraph = True
             continue
         # An HTML block (`<!--`, `<pre>`, `<div>`, … first on the line, relative to the open
@@ -508,8 +549,12 @@ def sanitize(lines: list[str]) -> list[str]:
         # Inline code spans are opaque: a <!-- inside `…` is code, not a comment opener.
         # Mask them (same length, harmless chars) for delimiter scanning; restore text after.
         scan, open_run = mask_code(ln, open_run)
-        prose = strip_inline_comments(ln, scan, lines[k + 1:])
-        in_paragraph = bool(prose.strip()) and not ATX_RE.match(prose) and not THEMATIC_RE.match(prose)
+        prose = strip_inline_comments(ln, scan, lines[k + 1:], containers)
+        # Prose that continues the paragraph keeps it open; otherwise the line opens one only if,
+        # read inside its container, it is neither a heading, a thematic break nor indented code.
+        rel = prose[base:]
+        in_paragraph = lazy or (bool(prose.strip()) and len(rel) - len(rel.lstrip(" ")) <= 3
+                                and not ATX_RE.match(rel) and not THEMATIC_RE.match(rel))
         out.append(prose)
     if fence_char is not None:
         unclosed.append(f"fenced code block opened with {fence_char * fence_len} never closes")
@@ -539,16 +584,23 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
     lines = sanitize(lines)
 
     def new_lesson(title: str, malformed: bool) -> dict:
-        return {"title": norm(title), "why": "", "do": "", "source": "", "source_raw": "", "col": 2, "last": None, "hard": False,
+        # col   content column of the lesson item; fcol  that of the open field item (None = none open)
+        # last  the open field's key; para  a paragraph is open (lazy continuation may follow);
+        # pcol  the content column of the container that paragraph lives in (a Setext underline
+        #       must sit there); tail  lesson-level prose after the fields — visible, so compared
+        return {"title": norm(title), "why": "", "do": "", "source": "", "source_raw": "", "tail": "",
+                "col": 2, "fcol": None, "last": None, "hard": False, "para": False, "pcol": 0,
                 "seen": {"why": False, "do": False, "source": False},
                 "problems": (["not-a-bold-lesson-bullet"] if malformed else [])}
 
     def absorb(lesson: dict, ln: str, para: bool = False) -> None:
-        """Continuation text belongs to the field above it — or to the title when no field
-        has started. A hard line break on the previous line is kept as HARD_BREAK, and a
-        blank line before this one (a new paragraph inside the item) as PARA_BREAK, so two
-        copies that render differently never compare equal."""
+        """Prose belongs to the open field — or to the title when no field has started, or to
+        the lesson's tail when the fields are done. A hard line break on the previous line is
+        kept as HARD_BREAK, and a new paragraph inside the item as PARA_BREAK, so two copies
+        that render differently never compare equal."""
         text = ln.strip()
+        if not text:
+            return
         sep = f" {PARA_BREAK} " if para else (f" {HARD_BREAK} " if lesson["hard"] else " ")
         if lesson["last"] is not None:
             key = lesson["last"]
@@ -558,13 +610,26 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
                 lesson[key] = norm(lesson[key] + sep + text)
         elif not any(lesson["seen"].values()):
             lesson["title"] = norm(lesson["title"] + sep + text)
+        else:
+            lesson["tail"] = norm(lesson["tail"] + sep + text)
         lesson["hard"] = ends_hard(ln)
 
-    prev_blank = True
+    def open_para(lesson: dict, col: int) -> None:
+        lesson["para"], lesson["pcol"] = True, col
+
+    def close_para(lesson: dict) -> None:
+        lesson["para"], lesson["hard"] = False, False
+
     top_para: str | None = None   # the previous line, when it was a top-level paragraph line (a Setext underline may follow)
+    ref_title_next = False        # the previous line was a reference definition without a title: its title may follow
     for idx, ln in enumerate(lines):
-        was_prev_blank, prev_blank = prev_blank, not ln.strip()
+        prev_blank = not ln.strip()
         prev_top_para, top_para = top_para, None
+        title_may_follow, ref_title_next = ref_title_next, False
+        if prev_blank:
+            if lesson is not None:
+                close_para(lesson)                # a blank line ends any paragraph (the list item stays open)
+            continue
         # A dash underline right under a top-level paragraph line turns that line into an H2
         # (Setext). It is never a day heading, so it is a bad heading that ends the section.
         if prev_top_para is not None and SETEXT_H2_RE.match(ln):
@@ -573,16 +638,30 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
             lesson = None
             continue
         if ln.startswith(CONT_MARK):              # paragraph text that began inside an inline comment
-            if lesson is not None and current is not None and not was_prev_blank:
+            if lesson is not None and current is not None and lesson["para"]:
                 absorb(lesson, ln[len(CONT_MARK):])
             continue
         indent = len(ln) - len(ln.lstrip(" "))
-        # CommonMark: a line indented at or past the open lesson's content column is INSIDE
-        # that list item — even `  ## 2026-08-23` — so it can never open a day section.
-        if lesson is not None and current is not None and indent >= lesson["col"] and H2_RE.match(ln):
-            lesson["problems"].append(f"heading {ln.strip()[:30]!r} nested inside the lesson (indent {indent})")
-            lesson["last"] = None
-            continue
+        # CommonMark: a line indented at or past the open lesson's content column is INSIDE that
+        # list item. Blocks there are read relative to the innermost item the line sits in: the
+        # open field's content column when the line reaches it, else the lesson's.
+        nested = lesson is not None and current is not None and indent >= lesson["col"]
+        if nested:
+            in_field = lesson["fcol"] is not None and indent >= lesson["fcol"]
+            eff = lesson["fcol"] if in_field else lesson["col"]
+            rel = ln[eff:]
+            # An ATX heading inside the item — even `  ## 2026-08-23` — can never open a day section
+            # (and a heading interrupts any paragraph). An H2 there is a problem; other levels are
+            # recorded as text so copies that differ in them differ.
+            if ATX_RE.match(rel):
+                if not in_field and lesson["fcol"] is not None:
+                    lesson["last"] = lesson["fcol"] = None
+                if H2_RE.match(rel):
+                    lesson["problems"].append(f"heading {ln.strip()[:30]!r} nested inside the lesson (indent {indent})")
+                else:
+                    absorb(lesson, ln, para=True)
+                close_para(lesson)
+                continue
         m = SECTION_RE.match(ln)
         if m:
             current = m.group(1)
@@ -598,20 +677,24 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
             lesson = None
             continue
         if current is None:
-            # Nothing visible belongs outside a day section except the file's H1 on its first line:
-            # a bullet, a paragraph, a thematic break, a code block — readers see it, no day file has it.
-            if ln.strip() and not is_mark(ln) and not (idx == 0 and H1_LINE_RE.match(ln)) and not LINK_REF_DEF_RE.match(ln):
+            # Nothing visible belongs outside a day section except the file's H1 on its first line
+            # and link reference definitions (with a title on the next line when the definition has
+            # none): a bullet, a paragraph, a thematic break, a code block — readers see it, no day file has it.
+            if title_may_follow and REF_TITLE_RE.match(ln):
+                continue
+            rd = LINK_REF_DEF_RE.match(ln)
+            if rd:
+                ref_title_next = rd.group("title") is None
+                continue
+            if not is_mark(ln) and not (idx == 0 and H1_LINE_RE.match(ln)):
                 misplaced.append(ln.strip()[:60])
             if ln.strip() in (FENCE_MARK, HTML_MARK):   # a comment renders nothing and is allowed metadata
                 misplaced.append("<code block or raw HTML>")
-            if ln.strip() and not TOP_BULLET_RE.match(ln) and not INTERRUPT_RE.match(ln) and not is_mark(ln):
+            if not TOP_BULLET_RE.match(ln) and not INTERRUPT_RE.match(ln) and not is_mark(ln) and (indent <= 3 or prev_top_para is not None):
                 top_para = ln
             continue
-        # CommonMark: a line indented at or past the current lesson's content column
-        # (marker + the whitespace after it, tabs expanded) belongs to that lesson;
-        # anything shallower is a sibling or a block that closes the list.
-        nested = lesson is not None and indent >= lesson["col"]
         if not nested:
+            # A line shallower than the lesson's content column is a sibling or a block that closes the list.
             if THEMATIC_RE.match(ln):             # `- - -` is a thematic break, never a list item
                 lesson = None
                 continue
@@ -624,29 +707,30 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
                     and (len(m.group(2)) - len(m.group(2).rstrip("\\"))) % 2 == 0   # `\**` escapes the first closing star
                     and m.group(2)[0] != "*"                                      # `***foo**` → `*` + strong
                     and not (m.group(2).endswith("*") and (len(m.group(2)) - 1 - len(m.group(2)[:-1].rstrip("\\"))) % 2 == 0)   # `**foo***` → strong + `*`
-                    and not INNER_STRONG_RE.search(CODE_SPAN_RE.sub(lambda c: "x" * len(c.group(0)), m.group(2)))   # `**` in code is opaque
+                    and not has_inner_strong(CODE_SPAN_RE.sub(lambda c: "x" * len(c.group(0)), m.group(2)))   # `**` in code is opaque
                     and gap_cols(indent + 1, m.group(1)) <= 4):
                 lesson = new_lesson(m.group(2), malformed=False)
                 lesson["col"] = content_col(li)
                 lesson["hard"] = ends_hard(ln)
+                open_para(lesson, lesson["col"])
                 sections[current].append(lesson)
                 continue
-            li_any = LIST_ITEM_RE.match(ln)
-            if TOP_BULLET_RE.match(ln) and not (lesson is not None and not was_prev_blank
-                                                and (li_any is None or not can_interrupt(li_any))):
+            if TOP_BULLET_RE.match(ln) and not (lesson is not None and lesson["para"]
+                                                and (li is None or not can_interrupt(li))):
                 # (a `2.` item or an empty item directly under a paragraph cannot start a list: it
                 # is lazy continuation text and is handled below)
                 parts = ln.strip().split(None, 1)
                 lesson = new_lesson("MALFORMED: " + (parts[1].strip() if len(parts) > 1 else "(empty list item)"), malformed=True)
                 lesson["col"] = content_col(li) if li else indent + 2
                 lesson["hard"] = ends_hard(ln)
+                open_para(lesson, lesson["col"])
                 sections[current].append(lesson)
                 continue
-            if ln.strip() and not is_mark(ln) and not INTERRUPT_RE.match(ln) and not HTML_BLOCK_RE.match(ln) and (
-                    lesson is None or was_prev_blank):
+            if not is_mark(ln) and not INTERRUPT_RE.match(ln) and (lesson is None or not lesson["para"]) and (
+                    indent <= 3 or prev_top_para is not None):
                 top_para = ln                          # a top-level paragraph line: a `---` next would make it an H2
-            if lesson is not None and ln.strip():
-                if not was_prev_blank and not INTERRUPT_RE.match(ln) and not HTML_BLOCK_RE.match(ln) and not is_mark(ln):
+            if lesson is not None:
+                if lesson["para"] and not INTERRUPT_RE.match(ln) and not is_mark(ln):
                     # Lazy continuation (CommonMark): a non-blank, non-list line directly
                     # under a paragraph — even at indent 0 — is still that paragraph's text.
                     absorb(lesson, ln)
@@ -656,39 +740,61 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
                     # fields that follow render as a NEW list, not this lesson's, so they must not reconnect.
                     lesson = None
             continue
-        # Nested line. A child list marker is valid only at indent col .. col+3
-        # (CommonMark: ≥ content column + 4 is an indented code block, not a list).
+        # ---- nested line: inside the open lesson item ----
         if is_mark(ln):
-            lesson["last"] = None     # a code block or comment block inside the item ends the paragraph; the lesson goes on
+            # A fenced code block, comment block or HTML block inside the item ends the paragraph;
+            # sitting beside the field items (shallower than the open field's content) it closes that item.
+            if not in_field and lesson["fcol"] is not None:
+                lesson["last"] = lesson["fcol"] = None
+            close_para(lesson)
             continue
-        m = FIELD_LABEL_RE.match(ln)
-        if m and indent >= lesson["col"] + 4:
-            lesson["problems"].append(f"field '{m.group(3)}' indented {indent} spaces renders as code, not a nested bullet")
-            lesson["last"] = None
+        # A dash underline directly under a paragraph inside the item, at that paragraph's
+        # container column, makes it a Setext H2 (CommonMark) — a heading hidden in a lesson.
+        if lesson["para"] and indent >= lesson["pcol"] and SETEXT_H2_RE.match(ln[lesson["pcol"]:]):
+            lesson["problems"].append(f"Setext H2 (underline {ln.strip()[:12]!r}) nested inside the lesson")
+            close_para(lesson)
             continue
-        if m and gap_cols(indent + 1, m.group(2)) > 4:
-            lesson["problems"].append(f"field '{m.group(3)}' has {gap_cols(indent + 1, m.group(2))} columns after `-`: its text renders as code, not a field")
-            lesson["last"] = None
+        if lesson["para"] and not interrupts_paragraph(ln, eff):
+            absorb(lesson, ln)                    # lazy continuation of the open paragraph, wherever the line sits
             continue
-        if not m:
-            # continuation text (indented) belongs to the field above it — or to the title;
-            # after a blank line it is a NEW paragraph of that field, which is recorded
-            if ln.strip():
-                absorb(lesson, ln, para=was_prev_blank)
+        if not in_field and lesson["fcol"] is not None:
+            lesson["last"] = lesson["fcol"] = None   # shallower than the open field's content: that item is closed
+        rel_indent = len(rel) - len(rel.lstrip(" "))
+        if rel_indent >= 4:
+            close_para(lesson)                    # an indented code block inside the item: code, never prose
             continue
-        label, value = m.group(3), m.group(4)
-        key = {"Why it matters here": "why", "Do": "do", "Source": "source"}[label]
-        lesson["last"] = key
-        lesson["hard"] = ends_hard(ln)
-        if lesson["seen"][key]:
-            lesson["problems"].append(f"duplicate {key}")
-        lesson["seen"][key] = True
-        # The value may continue on the next line(s); emptiness and the source shape are
-        # judged once the whole field has been assembled (see the finalisation loop).
-        if key == "source":
-            lesson["source_raw"] = norm(value)
-        else:
-            lesson[key] = norm(value)
+        fm = FIELD_LABEL_RE.match(ln)
+        if fm and not in_field:
+            gap = gap_cols(indent + 1, fm.group(2))
+            if gap > 4:
+                lesson["problems"].append(f"field '{fm.group(3)}' has {gap} columns after `-`: its text renders as code, not a field")
+                lesson["last"], lesson["fcol"] = None, indent + 2
+                close_para(lesson)
+                continue
+            label, value = fm.group(3), fm.group(4)
+            key = {"Why it matters here": "why", "Do": "do", "Source": "source"}[label]
+            lesson["last"], lesson["fcol"] = key, indent + 1 + gap
+            open_para(lesson, lesson["fcol"])
+            lesson["hard"] = ends_hard(ln)
+            if lesson["seen"][key]:
+                lesson["problems"].append(f"duplicate {key}")
+            lesson["seen"][key] = True
+            # The value may continue on the next line(s); emptiness and the source shape are
+            # judged once the whole field has been assembled (see the finalisation loop).
+            if key == "source":
+                lesson["source_raw"] = norm(value)
+            else:
+                lesson[key] = norm(value)
+            continue
+        if THEMATIC_RE.match(rel):                # a thematic break inside the item: a block, not text
+            close_para(lesson)
+            continue
+        # Anything else opens a new paragraph inside the item: a list item that is not a lesson
+        # field (a sub-bullet, an ordered item, a `- Do:` nested inside another field), a block
+        # quote, or plain text after a blank line, a block or code. Its text is recorded.
+        li = LIST_ITEM_RE.match(rel)
+        absorb(lesson, ln, para=True)
+        open_para(lesson, eff + content_col(li) if li else eff)
 
     for ls in sections.values():
         for l in ls:
@@ -715,8 +821,11 @@ def shape_errors(sections: dict[str, list[dict]]) -> list[str]:
     return [f"{d}#{i}: {p}" for d, ls in sections.items() for i, l in enumerate(ls, 1) for p in l["problems"]]
 
 
-def lesson_key(l: dict) -> tuple[str, str, str, str]:
-    return (l["title"], l["why"], l["do"], l["source"])
+KEY_FIELDS = ("title",) + FIELDS + ("tail",)   # what two copies of a lesson are compared on
+
+
+def lesson_key(l: dict) -> tuple[str, str, str, str, str]:
+    return (l["title"], l["why"], l["do"], l["source"], l["tail"])
 
 
 # --- knowledge.md ----------------------------------------------------------
@@ -728,7 +837,7 @@ elif not kpath.is_file():
     fail("knowledge.md", "missing")
 else:
     lines = read_lines(kpath) or []
-    if lines and lines[0].rstrip() == KNOWLEDGE_H1:
+    if lines and lines[0] == KNOWLEDGE_H1:            # exact: trailing whitespace would break the connector's anchor too
         ok("knowledge:h1", "exact connector heading present")
     else:
         fail("knowledge:h1", f"first line must be {KNOWLEDGE_H1!r}, got {(lines[0] if lines else '')[:70]!r}")
@@ -835,7 +944,7 @@ else:
             diff_fields: list[str] = []
             for a, b in zip(keys_k, keys_d):
                 if a != b and a[0] == b[0]:
-                    diff_fields.append(a[0][:30] + ": " + ",".join(f for f, x, y in zip(("title",) + FIELDS, a, b) if x != y))
+                    diff_fields.append(a[0][:30] + ": " + ",".join(f for f, x, y in zip(KEY_FIELDS, a, b) if x != y))
             detail = f"{len(keys_d)} lesson(s) here vs {len(keys_k)} in knowledge.md"
             if diff_fields:
                 detail += f"; same title, different content: {diff_fields[:3]}"
