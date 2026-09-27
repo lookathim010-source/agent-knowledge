@@ -7,8 +7,8 @@ has the shape every reader relies on:
   knowledge.md   H1, then `## YYYY-MM-DD` sections newest first; every lesson
                  is a bold bullet with "Why it matters here", "Do:", and a
                  "Source:" line carrying a link and a confidence percentage
-  lessons/       one YYYY-MM-DD.md per day section in knowledge.md, and the
-                 same lesson count per day
+  lessons/       one YYYY-MM-DD.md per day section in knowledge.md, no
+                 orphans, and the same lessons (titles, order, shape) per day
   verified/      files named YYYY-MM-DD_topic_vN.md that start with an H1
 
 Contract: one line per check (PASS|WARN|FAIL name evidence), final RESULT
@@ -49,22 +49,30 @@ def fail(name: str, detail: str) -> None:
     record("FAIL", name, detail)
 
 
-def parse_lessons(lines: list[str]) -> dict[str, list[dict]]:
-    """Return {date: [lesson dicts]} for a knowledge-style file."""
+def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
+    """Return ({date: [lesson dicts]}, [duplicate dates]) for a knowledge-style file.
+
+    A repeated `## YYYY-MM-DD` heading is recorded as a duplicate and its
+    lessons are appended to the first occurrence, so nothing is silently lost.
+    """
     sections: dict[str, list[dict]] = {}
+    duplicates: list[str] = []
     current: str | None = None
     lesson: dict | None = None
     for ln in lines:
         m = SECTION_RE.match(ln)
         if m:
             current = m.group(1)
-            sections[current] = []
+            if current in sections:
+                duplicates.append(current)
+            else:
+                sections[current] = []
             lesson = None
             continue
         if current is None:
             continue
         if LESSON_RE.match(ln):
-            lesson = {"why": False, "do": False, "source": False, "title": ln.strip("- *\n")[:60]}
+            lesson = {"why": False, "do": False, "source": False, "title": ln.strip().strip("-").strip().strip("*").strip()}
             sections[current].append(lesson)
             continue
         if lesson is not None and ln.startswith("  - "):
@@ -74,7 +82,12 @@ def parse_lessons(lines: list[str]) -> dict[str, list[dict]]:
                 lesson["do"] = True
             elif SOURCE_RE.match(ln):
                 lesson["source"] = True
-    return sections
+    return sections, duplicates
+
+
+def shape_errors(sections: dict[str, list[dict]]) -> list[str]:
+    """Names of missing lesson fields as 'date#n:field'."""
+    return [f"{d}#{i}:{k}" for d, ls in sections.items() for i, l in enumerate(ls, 1) for k in ("why", "do", "source") if not l[k]]
 
 
 # --- knowledge.md ----------------------------------------------------------
@@ -88,7 +101,7 @@ else:
         ok("knowledge:h1", lines[0][:70])
     else:
         fail("knowledge:h1", "first line is not an H1")
-    sections = parse_lessons(lines)
+    sections, dup_dates = parse_lessons(lines)
     dates = list(sections)
     if not dates:
         fail("knowledge:sections", "no `## YYYY-MM-DD` sections")
@@ -98,11 +111,13 @@ else:
             ok("knowledge:order", "newest first")
         else:
             fail("knowledge:order", f"sections not newest-first: {dates}")
-        if len(set(dates)) != len(dates):
-            fail("knowledge:unique-dates", "duplicate day sections")
-    bad = [(d, i, k) for d, ls in sections.items() for i, l in enumerate(ls, 1) for k in ("why", "do", "source") if not l[k]]
+        if dup_dates:
+            fail("knowledge:unique-dates", f"day section repeated: {sorted(set(dup_dates))}")
+        else:
+            ok("knowledge:unique-dates", "no repeated day sections")
+    bad = shape_errors(sections)
     if bad:
-        fail("knowledge:lesson-shape", f"{len(bad)} missing field(s): " + ", ".join(f"{d}#{i}:{k}" for d, i, k in bad[:6]))
+        fail("knowledge:lesson-shape", f"{len(bad)} missing field(s): " + ", ".join(bad[:6]))
     elif sections:
         ok("knowledge:lesson-shape", "every lesson has why / do / source+confidence")
     empty = [d for d, ls in sections.items() if not ls]
@@ -127,16 +142,32 @@ else:
     elif sections:
         ok("lessons:coverage", "every day section has a lessons file")
     if extra:
-        warn("lessons:orphans", f"lessons files with no knowledge.md section: {extra}")
+        fail("lessons:orphans", f"lessons files with no knowledge.md section: {extra}")
     for d in sections:
         p = ldir / f"{d}.md"
-        if p.is_file():
-            n_day = sum(1 for ln in p.read_text(encoding="utf-8").splitlines() if LESSON_RE.match(ln))
-            n_k = len(sections[d])
-            if n_day == n_k:
-                ok(f"lessons:{d}", f"{n_day} lesson(s) match knowledge.md")
-            else:
-                fail(f"lessons:{d}", f"{n_day} lesson(s) here vs {n_k} in knowledge.md")
+        if not p.is_file():
+            continue
+        day_lines = p.read_text(encoding="utf-8").splitlines()
+        # A per-day file has no `## date` heading of its own: parse it as that day's section.
+        day_sections, day_dups = parse_lessons([f"## {d}"] + [ln for ln in day_lines if not SECTION_RE.match(ln)])
+        day_lessons = day_sections.get(d, [])
+        problems: list[str] = []
+        bad_day = shape_errors({d: day_lessons})
+        if bad_day:
+            problems.append(f"missing field(s) {bad_day[:4]}")
+        titles_k = [l["title"] for l in sections[d]]
+        titles_d = [l["title"] for l in day_lessons]
+        if titles_d != titles_k:
+            only_k = [t[:40] for t in titles_k if t not in titles_d]
+            only_d = [t[:40] for t in titles_d if t not in titles_k]
+            problems.append(f"{len(titles_d)} lesson(s) here vs {len(titles_k)} in knowledge.md"
+                            + (f"; only in knowledge.md: {only_k}" if only_k else "")
+                            + (f"; only here: {only_d}" if only_d else "")
+                            + (("; same set, different order" if len(titles_d) == len(titles_k) else "; a title repeats") if not only_k and not only_d else ""))
+        if problems:
+            fail(f"lessons:{d}", "; ".join(problems))
+        else:
+            ok(f"lessons:{d}", f"{len(day_lessons)} lesson(s), same titles and shape as knowledge.md")
 
 # --- verified/ -------------------------------------------------------------
 vdir = ROOT / "verified"
