@@ -16,7 +16,8 @@ has the shape every reader relies on:
                  (title, why, do, source — continuation lines included) to
                  that day's section in knowledge.md, in the same order
   verified/      only regular files named YYYY-MM-DD_topic_vN.md (real dates)
-                 whose first visible non-blank line is a real H1 (not indented 4+)
+                 whose first visible non-blank line is a real H1 with text (not indented 4+;
+                 a code block or raw HTML before it is visible, a comment is not)
   Text inside HTML comments, fenced code blocks or indented code blocks never
   counts as content; a copy that turns prose into code (or back) is a difference.
 
@@ -99,12 +100,14 @@ def link_ref_def(ln: str) -> bool | None:
     `<…>` (no `<`, `>` inside) or a bare one with balanced parentheses; anything else after it
     makes the line prose."""
     lm = _REF_LABEL_RE.match(ln)
-    if not lm or not lm.group(1).strip(" \t"):
+    if not lm or not lm.group(1).strip(" \t") or len(lm.group(1)) > 999:   # CommonMark: at most 999 characters in a label
         return None
     i = lm.end()
     if i < len(ln) and ln[i] == "<":
-        j = ln.find(">", i + 1)
-        if j < 0 or "<" in ln[i + 1:j]:
+        j = i + 1                                    # `<…>`: ends at the first UNESCAPED `>`; an unescaped `<` inside breaks it
+        while j < len(ln) and ln[j] not in "<>":
+            j += 2 if ln[j] == "\\" and j + 1 < len(ln) and ln[j + 1] in ASCII_PUNCT else 1
+        if j >= len(ln) or ln[j] != ">":
             return None
         end = j + 1
     else:
@@ -118,7 +121,7 @@ def link_ref_def(ln: str) -> bool | None:
 
 
 def first_visible(lines: list[str]) -> str:
-    """The first line a reader sees as content: blank lines, block marks, link reference
+    """The first line a reader sees as content: blank lines, comment blocks, link reference
     definitions (and, for a definition that has no title yet, its title on the following
     line — a quoted line after a definition that already carries one is a paragraph) are
     skipped. A continuation line (the prose after a multi-line inline comment's `-->`)
@@ -132,9 +135,11 @@ def first_visible(lines: list[str]) -> str:
                 return tail
             k += 1
             continue
-        if blank(ln) or is_mark(ln):
+        if blank(ln) or mark_kind(ln) == COMMENT_MARK:
             k += 1
             continue
+        if is_mark(ln):
+            return mark_token(ln)                    # a code block or raw HTML is visible content
         rd = link_ref_def(ln)
         if rd is not None:
             k += 1
@@ -183,7 +188,24 @@ def parse_source(text: str) -> tuple[str, int] | None:
     return (dest, int(cm.group(1))) if cm else None
 DAY_H1_RE = re.compile(r"^# Lessons — ([0-9]{4}-[0-9]{2}-[0-9]{2})[ \t]*$")
 VERIFIED_NAME_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}_[a-z0-9-]+_v[0-9]+\.md$")
-H1_LINE_RE = re.compile(r"^ {0,3}#[ \t]+[^ \t]")   # a real ATX H1 with text: ≤3 leading spaces (4 = code), space or tab after `#`
+_H1_OPEN_RE = re.compile(r"^ {0,3}#(?:[ \t]+(.*))?$")   # a `#` heading line: ≤3 leading spaces (4 = code), space/tab or EOL after `#`
+
+
+def h1_text(ln: str) -> str | None:
+    """The content of an ATX H1, or None when the line is not one. CommonMark strips the optional
+    closing sequence (`#`s preceded by a space or tab, or making up the whole content): `# ##`
+    is an H1 with NO text; `# Title ##` is "Title"; `# \#` keeps its escaped hash."""
+    m = _H1_OPEN_RE.match(ln)
+    if not m:
+        return None
+    content = (m.group(1) or "").strip(" \t")
+    if re.fullmatch(r"#+", content):
+        return ""
+    return re.sub(r"[ \t]+#+$", "", content).strip(" \t")
+
+
+def is_real_h1(ln: str) -> bool:
+    return bool(h1_text(ln))
 FIELDS = ("why", "do", "source")
 H2_RE = re.compile(r"^ {0,3}##(?:[ \t]|$)")   # any ATX H2 (≤3-space indent), including a bare `##`; NBSP is not a separator
 bad_headings: list[str] = []   # filled by parse_lessons: H2s that are not valid day headings
@@ -274,14 +296,14 @@ def read_lines(p: pathlib.Path) -> list[str] | None:
 
 FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 FENCE_MARK = "\x00fence"       # left by sanitize() where a fenced block opened, at its indent: a block boundary, never text
-COMMENT_MARK = "\x00comment"   # same, where an HTML comment BLOCK (`<!--` at line start) opened
+COMMENT_MARK = "\x00comment"   # same, where a NON-RENDERING HTML block opened: comment, `<?…?>`, `<!DECL>`, CDATA (types 2-5)
 CONT_MARK = "\x00cont"         # prefix: this line is paragraph continuation text (it began inside an inline comment)
 LIST_ITEM_RE = re.compile(r"^( *)([-*+]|[0-9]{1,9}[.)])([ \t]+)[^ \t]")   # marker + whitespace + content (for content-column tracking)
 THEMATIC_RE = re.compile(r"^ {0,3}" + THEMATIC_BREAK)                 # `---`, `- - -`, `***`: a thematic break outranks a list item
 _HTML6 = ("address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|"
           "fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|"
           "menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul")
-HTML_MARK = "\x00html"         # left by sanitize() where an HTML block other than a comment (types 1, 3-7) opened
+HTML_MARK = "\x00html"         # left by sanitize() where a RENDERING HTML block opened (types 1, 6, 7)
 MARKS = (FENCE_MARK, COMMENT_MARK, HTML_MARK)
 PAYLOAD_SEP = "\x01"          # a fence/HTML mark may carry the block's text after this: `<indent>MARK\x01line⏎line`
 BLOCK_SEP = "⏎"
@@ -299,14 +321,16 @@ def html_block_start(rel: str, in_paragraph: bool) -> tuple[str, str | None] | N
     m = _HTML_TYPE1.match(rel)
     if m:
         return HTML_MARK, "</" + m.group(1).lower() + ">"
+    # Types 2-5 (comment, processing instruction, declaration, CDATA) are raw HTML that a browser
+    # never displays: they leave COMMENT_MARK, the non-rendering mark. Types 1, 6 and 7 render.
     if re.match(r"^ {0,3}<!--", rel):
         return COMMENT_MARK, "-->"
     if re.match(r"^ {0,3}<\?", rel):
-        return HTML_MARK, "?>"
+        return COMMENT_MARK, "?>"
     if re.match(r"^ {0,3}<!\[CDATA\[", rel):
-        return HTML_MARK, "]]>"
+        return COMMENT_MARK, "]]>"
     if re.match(r"^ {0,3}<![A-Z]", rel):         # uppercase only (CommonMark type 4); `<!foo>` is text
-        return HTML_MARK, ">"
+        return COMMENT_MARK, ">"
     if re.match(r"^ {0,3}</?(?:" + _HTML6 + r")(?:[ \t]|/?>|$)", rel, re.IGNORECASE):
         return HTML_MARK, None
     if not in_paragraph and _HTML_TYPE7.match(rel):
@@ -542,6 +566,8 @@ def strip_inline_comments(ln: str, scan: str, rest: list[str] = (), containers: 
                 i = j + 3
         else:
             j = scan.find("<!--", i)
+            while j >= 0 and (j - len(scan[:j].rstrip("\\"))) % 2 == 1:
+                j = scan.find("<!--", j + 1)         # `\<!--`: the `<` is escaped, so this is literal text
             if j < 0:
                 buf.append(ln[i:])
                 i = len(scan)
@@ -557,7 +583,7 @@ def strip_inline_comments(ln: str, scan: str, rest: list[str] = (), containers: 
     # or a comment that continues onto the next line) were never line-ending spaces, so
     # they must not read as a hard break once the comment is gone. Spaces AFTER `-->` stay.
     if comment_here and (_in_comment or scan.endswith("-->")):
-        prose = prose.rstrip()
+        prose = prose.rstrip(" \t")                 # a NBSP there is content and stays
     return prose
 
 
@@ -730,7 +756,7 @@ def sanitize(lines: list[str]) -> list[str]:
     return out
 
 
-def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
+def parse_lessons(lines: list[str], *, presanitized: bool = False) -> tuple[dict[str, list[dict]], list[str]]:
     """Return ({date: [lesson]}, [duplicate dates]) for a knowledge-style file.
 
     A lesson is {"title", "why", "do", "source", "problems"} with the field
@@ -746,7 +772,8 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
     lesson: dict | None = None
     bad_headings.clear()
     misplaced.clear()
-    lines = sanitize(lines)
+    if not presanitized:                 # a day file arrives already sanitized: a second pass would read block payloads as Markdown
+        lines = sanitize(lines)
 
     def new_lesson(title: str, malformed: bool) -> dict:
         # col   content column of the lesson item; fcol  that of the open field item (None = none open)
@@ -759,8 +786,9 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
                 "problems": (["not-a-bold-lesson-bullet"] if malformed else [])}
 
     def absorb(lesson: dict, ln: str, para: bool = False) -> None:
-        """Prose belongs to the open field — or to the title when no field has started, or to
-        the lesson's tail when the fields are done. A hard line break on the previous line is
+        """Prose belongs to the open field — or, before any field, to the title when it continues
+        the title's own paragraph (a shape problem) and to the lesson's tail when it is a separate
+        paragraph; after the fields, to the tail too. A hard line break on the previous line is
         kept as HARD_BREAK, and a new paragraph inside the item as PARA_BREAK, so two copies
         that render differently never compare equal."""
         text = ln.strip(" \t")
@@ -773,10 +801,14 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
                 lesson["source_raw"] = norm(lesson["source_raw"] + sep + text)
             else:
                 lesson[key] = norm(lesson[key] + sep + text)
-        elif not any(lesson["seen"].values()):
+        elif not any(lesson["seen"].values()) and not para:
+            # Same paragraph as the bold title: CommonMark renders this text OUTSIDE the closing `**`,
+            # so the title paragraph is no longer one strong span.
             lesson["title"] = norm(lesson["title"] + sep + text)
+            if "not-a-bold-lesson-bullet" not in lesson["problems"] and "title paragraph continues past the bold span" not in lesson["problems"]:
+                lesson["problems"].append("title paragraph continues past the bold span")
         else:
-            lesson["tail"] = norm(lesson["tail"] + sep + text)
+            lesson["tail"] = norm(lesson["tail"] + sep + text)   # lesson-level prose outside title and fields: visible, so compared
         lesson["hard"] = ends_hard(ln)
 
     def open_para(lesson: dict, col: int, qdepth: int = 0) -> None:
@@ -860,7 +892,7 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
             if rd is not None:
                 ref_title_next = rd is False
                 continue
-            if not is_mark(ln) and not (idx == 0 and H1_LINE_RE.match(ln)):
+            if not is_mark(ln) and not (idx == 0 and is_real_h1(ln)):
                 misplaced.append(ln.strip()[:60])
             if mark_kind(ln) in (FENCE_MARK, HTML_MARK):   # a comment renders nothing and is allowed metadata
                 misplaced.append("<code block or raw HTML>")
@@ -965,7 +997,8 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
             else:
                 lesson[key] = norm(value)
             continue
-        if THEMATIC_RE.match(rel):                # a thematic break inside the item: a block, not text
+        if THEMATIC_RE.match(rel):                # a thematic break inside the item renders as <hr>: a visible block
+            absorb(lesson, "⟨hr⟩", para=True)
             close_para(lesson)
             continue
         # Anything else opens a new paragraph inside the item: a list item that is not a lesson
@@ -1106,7 +1139,7 @@ else:
         if stray_headings:
             problems.append(f"contains H2 heading(s) {stray_headings[:4]} — a per-day file has no `## ` headings")
         # A per-day file carries no `## ` heading of its own: parse it as that day's section.
-        day_sections, _ = parse_lessons([f"## {d}"] + [ln for ln in day_lines if not is_h2(ln)])
+        day_sections, _ = parse_lessons([f"## {d}"] + [ln for ln in day_lines if not is_h2(ln)], presanitized=True)
         if bad_headings:
             problems.append(f"contains Setext H2 heading(s) {bad_headings[:4]} — a per-day file has no `## ` headings")
         day_lessons = day_sections.get(d, [])
@@ -1157,15 +1190,15 @@ else:
     else:
         ok("verified:names", f"{len(vfiles)} sheet(s), all dated and versioned")
     def first_nonblank(p: pathlib.Path) -> str | None:
-        """First line a reader sees as prose: comments and fenced code are skipped, not counted."""
+        """First line a reader sees: comment/declaration blocks are skipped; code and raw HTML count."""
         lines = read_lines(p)
         if lines is None:
             return None
         return first_visible(sanitize(lines))
     firsts = {p.name: first_nonblank(p) for p in vfiles}
-    noh1 = [n for n, f in firsts.items() if f is not None and not H1_LINE_RE.match(f)]
+    noh1 = [n for n, f in firsts.items() if f is not None and not is_real_h1(f)]
     if noh1:
-        fail("verified:h1", f"first visible non-blank line is not an H1 (indent ≤3, `# `; comments and code ignored): {noh1}")
+        fail("verified:h1", f"first visible non-blank line is not an H1 with text (indent ≤3, `# `; comments and declarations ignored, code and raw HTML count): {noh1}")
     elif vfiles:
         ok("verified:h1", "every sheet starts with an H1")
 
