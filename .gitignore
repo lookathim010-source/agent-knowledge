@@ -1,0 +1,24 @@
+# Secrets and local config — never commit
+.env
+.env.*
+*.pem
+*.key
+secrets/
+
+# OS and editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/
+
+# Toolchains
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+
+# Harness output (paste into the PR, do not commit)
+harness/out/
+*.log
