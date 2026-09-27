@@ -39,12 +39,13 @@ KNOWLEDGE_H1 = "# daily-dev-agentic knowledge — T agent"   # the connector dep
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SECTION_RE = re.compile(r"^ {0,3}## (\d{4}-\d{2}-\d{2})\s*$")
-LESSON_RE = re.compile(r"^ {0,3}-[ \t]\*\*(.+?)\*\*\s*$")        # well-formed bold lesson bullet (≤3-space indent is still top level; space or tab after `-`)
+LESSON_RE = re.compile(r"^ {0,3}-([ \t]+)\*\*(.+?)\*\*\s*$")     # bold lesson bullet: `-`, 1-4 columns of whitespace (checked after), **title**
 TOP_BULLET_RE = re.compile(r"^ {0,3}(?:[-*+]|\d+[.)])(?:[ \t]+\S|\s*$)")   # any top-level list item incl. an EMPTY one, any marker, space or tab after it
 FIELD_LABEL_RE = re.compile(r"^\s*-[ \t](Why it matters here|Do|Source):(.*)$")   # label first, value validated after (nesting checked by indent)
 # Blocks that interrupt a paragraph (CommonMark): an ATX heading, a block quote, a thematic break.
 # A line like this at top level is never lazy continuation of the lesson above it.
-INTERRUPT_RE = re.compile(r"^ {0,3}(?:#{1,6}(?:\s|$)|>|(?:[-*_][ \t]*){3,}$)")
+THEMATIC_BREAK = r"(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$"   # 3+ of the SAME character (`- * -` is not a break)
+INTERRUPT_RE = re.compile(r"^ {0,3}(?:#{1,6}(?:\s|$)|>|" + THEMATIC_BREAK + ")")
 LINK_LABEL = r"\[(?:\\.|[^\]\\])+\]"                                          # allows escaped \] inside the label
 SOURCE_VALUE_RE = re.compile(r"^ " + LINK_LABEL + r"\(https?://[^)\s]+\).*confidence (\d{1,3})%")
 DAY_H1_RE = re.compile(r"^# Lessons — (\d{4}-\d{2}-\d{2})\s*$")
@@ -107,10 +108,46 @@ def read_lines(p: pathlib.Path) -> list[str] | None:
 
 
 FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
-FENCE_MARK = "\x00fence"   # left by sanitize() where a fenced block opened, at its indent: a block boundary, never text
-LIST_ITEM_RE = re.compile(r"^( *)([-*+]|\d{1,9}[.)])( +)\S")   # marker + 1..n spaces + content (for container tracking)
+FENCE_MARK = "\x00fence"       # left by sanitize() where a fenced block opened, at its indent: a block boundary, never text
+COMMENT_MARK = "\x00comment"   # same, where an HTML comment BLOCK (`<!--` at line start) opened
+MARKS = (FENCE_MARK, COMMENT_MARK)
+LIST_ITEM_RE = re.compile(r"^( *)([-*+]|\d{1,9}[.)])([ \t]+)\S")   # marker + whitespace + content (for content-column tracking)
+THEMATIC_RE = re.compile(r"^ {0,3}" + THEMATIC_BREAK)                 # `---`, `- - -`, `***`: a thematic break outranks a list item
+HTML_COMMENT_BLOCK_RE = re.compile(r"^ {0,3}<!--")                  # CommonMark HTML block type 2 starts here
+INNER_STRONG_RE = re.compile(r"(?<!\\)\*\*")                        # an unescaped ** inside a title: not ONE strong span
 CODE_SPAN_RE = re.compile(r"(`+)(?!`)(?:.+?)(?<!`)\1(?!`)")   # CommonMark-ish: matching backtick runs
 unclosed: list[str] = []   # filled by sanitize: a fence or comment still open at end of file
+
+
+def is_mark(ln: str) -> bool:
+    return ln.strip() in MARKS
+
+
+def expand_lead(ln: str) -> str:
+    """Leading tabs expanded to spaces at 4-column tab stops (CommonMark), rest untouched."""
+    col = 0
+    i = 0
+    while i < len(ln) and ln[i] in " \t":
+        col = col + 1 if ln[i] == " " else col + 4 - col % 4
+        i += 1
+    return " " * col + ln[i:]
+
+
+def gap_cols(start: int, ws: str) -> int:
+    """Width in columns of whitespace `ws` beginning at column `start` (tabs to 4-column stops)."""
+    end = start
+    for ch in ws:
+        end = end + 1 if ch == " " else end + 4 - end % 4
+    return end - start
+
+
+def content_col(li: re.Match) -> int:
+    """Content column of a list item (CommonMark): marker end, then the whitespace
+    after it expanded at 4-column tab stops; 5+ columns of it counts as 1 (the rest
+    is code inside the item)."""
+    col = len(li.group(1)) + len(li.group(2))
+    gap = gap_cols(col, li.group(3))
+    return col + (1 if gap >= 5 else gap)
 
 
 def fence_match(ln: str, base: int) -> re.Match | None:
@@ -135,17 +172,22 @@ def sanitize(lines: list[str]) -> list[str]:
     to the content column of the innermost open list item, so a code block
     nested under a lesson field is code too. The opener line is replaced by
     FENCE_MARK at the fence's indent so the parser still sees a block boundary
-    there (a fence closes an open list item just as a heading does); the rest
-    of the block is blank. Line count is preserved.
+    there (a fence closes an open list item just as a heading does), and an
+    HTML comment that starts a line (an HTML block) leaves COMMENT_MARK the
+    same way; an inline `<!-- … -->` mid-paragraph leaves nothing, it is just
+    raw inline HTML. The rest of each block is blank. Leading tabs are expanded
+    to spaces at 4-column stops. Line count is preserved.
     """
     out: list[str] = []
     fence_char: str | None = None
     fence_len = 0
     fence_base = 0
     in_comment = False
+    block_comment = False        # the open comment began a line: the whole closing line is HTML, not prose
     containers: list[int] = []   # content columns of the open list items, innermost last
     unclosed.clear()
     for ln in lines:
+        ln = expand_lead(ln)
         if fence_char is not None:
             m = fence_match(ln, fence_base)
             if m and m.group(1)[0] == fence_char and len(m.group(1)) >= fence_len and m.group(2).strip() == "":
@@ -158,6 +200,10 @@ def sanitize(lines: list[str]) -> list[str]:
                 out.append("")
                 continue
             in_comment = False
+            if block_comment:
+                block_comment = False
+                out.append("")       # HTML block type 2 ends WITH the line holding `-->`
+                continue
             ln = ln[j + 3:]          # the rest of the line is prose again
         # Track which list items are still open: a non-blank line shallower than an
         # item's content column closes that item (and everything nested in it).
@@ -166,11 +212,16 @@ def sanitize(lines: list[str]) -> list[str]:
             while containers and indent < containers[-1]:
                 containers.pop()
             li = LIST_ITEM_RE.match(ln)
-            if li:
-                gap = len(li.group(3))
-                col = len(li.group(1)) + len(li.group(2)) + (1 if gap >= 5 else gap)   # ≥5 spaces = code inside the item
-                containers.append(col)
+            if li and not THEMATIC_RE.match(ln):
+                containers.append(content_col(li))
         base = containers[-1] if containers else 0
+        # An HTML comment block (`<!--` first on the line, relative to the open item) is a
+        # block like a fence: it leaves a boundary mark and its lines are not prose.
+        if len(ln) - len(ln.lstrip(" ")) >= base and HTML_COMMENT_BLOCK_RE.match(ln[base:]):
+            out.append(" " * (len(ln) - len(ln.lstrip(" "))) + COMMENT_MARK)
+            if "-->" not in ln[ln.find("<!--") + 4:]:
+                in_comment = block_comment = True
+            continue
         m = fence_match(ln, base)
         # CommonMark: a backtick fence cannot open when its info string contains a
         # backtick (that line is an inline code span, not a fence); tilde fences may.
@@ -227,7 +278,7 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
     lines = sanitize(lines)
 
     def new_lesson(title: str, malformed: bool) -> dict:
-        return {"title": norm(title), "why": "", "do": "", "source": "", "indent": 0, "last": None,
+        return {"title": norm(title), "why": "", "do": "", "source": "", "col": 2, "last": None,
                 "seen": {"why": False, "do": False, "source": False},
                 "problems": (["not-a-bold-lesson-bullet"] if malformed else [])}
 
@@ -260,44 +311,52 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
             lesson = None
             continue
         if current is None:
-            if TOP_BULLET_RE.match(ln):           # a lesson-shaped bullet under no day heading: readers never see it as a lesson
+            if TOP_BULLET_RE.match(ln) and not THEMATIC_RE.match(ln):   # a bullet under no day heading: readers never see it as a lesson
                 misplaced.append(ln.strip()[:60])
             continue
         indent = len(ln) - len(ln.lstrip(" "))
         # CommonMark: a line indented at or past the current lesson's content column
-        # (its own indent + 2 for "- ") belongs to that lesson; anything shallower is a sibling.
-        nested = lesson is not None and indent >= lesson["indent"] + 2
+        # (marker + the whitespace after it, tabs expanded) belongs to that lesson;
+        # anything shallower is a sibling or a block that closes the list.
+        nested = lesson is not None and indent >= lesson["col"]
         if not nested:
+            if THEMATIC_RE.match(ln):             # `- - -` is a thematic break, never a list item
+                lesson = None
+                continue
             m = LESSON_RE.match(ln)
-            if m and m.group(1).strip():          # `- ** **` is not bold text, so not a lesson title
-                lesson = new_lesson(m.group(1), malformed=False)
-                lesson["indent"] = indent
+            li = LIST_ITEM_RE.match(ln)
+            # `- ** **` is not bold; `- **a** b **c**` is two strong spans, not one title;
+            # 5+ columns after the marker make the title an indented code block, not bold.
+            if (m and li and m.group(2).strip() and not INNER_STRONG_RE.search(m.group(2))
+                    and gap_cols(indent + 1, m.group(1)) <= 4):
+                lesson = new_lesson(m.group(2), malformed=False)
+                lesson["col"] = content_col(li)
                 sections[current].append(lesson)
                 continue
             if TOP_BULLET_RE.match(ln):
                 parts = ln.strip().split(None, 1)
                 lesson = new_lesson("MALFORMED: " + (parts[1].strip() if len(parts) > 1 else "(empty list item)"), malformed=True)
-                lesson["indent"] = indent
+                lesson["col"] = content_col(li) if li else indent + 2
                 sections[current].append(lesson)
                 continue
             if lesson is not None and ln.strip():
-                if not was_prev_blank and not INTERRUPT_RE.match(ln) and ln.strip() != FENCE_MARK:
+                if not was_prev_blank and not INTERRUPT_RE.match(ln) and not is_mark(ln):
                     # Lazy continuation (CommonMark): a non-blank, non-list line directly
                     # under a paragraph — even at indent 0 — is still that paragraph's text.
                     absorb(lesson, ln.strip())
                 else:
-                    # A heading, thematic break, block quote, fenced code block, or a
-                    # paragraph after a blank line closes the list: fields that follow
-                    # render as a NEW list, not as this lesson's, so they must not reconnect.
+                    # A heading, thematic break, block quote, fenced code block, HTML comment
+                    # block, or a paragraph after a blank line closes the list: fields that
+                    # follow render as a NEW list, not as this lesson's, so they must not reconnect.
                     lesson = None
             continue
-        # Nested line. A child list marker is valid only at indent lesson+2 .. lesson+5
+        # Nested line. A child list marker is valid only at indent col .. col+3
         # (CommonMark: ≥ content column + 4 is an indented code block, not a list).
-        if ln.strip() == FENCE_MARK:
-            lesson["last"] = None     # a code block inside the item ends the paragraph; the lesson goes on
+        if is_mark(ln):
+            lesson["last"] = None     # a code block or comment block inside the item ends the paragraph; the lesson goes on
             continue
         m = FIELD_LABEL_RE.match(ln)
-        if m and indent >= lesson["indent"] + 6:
+        if m and indent >= lesson["col"] + 4:
             lesson["problems"].append(f"field '{m.group(1)}' indented {indent} spaces renders as code, not a nested bullet")
             lesson["last"] = None
             continue
@@ -397,7 +456,9 @@ else:
 
 # --- lessons/ --------------------------------------------------------------
 ldir = ROOT / "lessons"
-if not ldir.is_dir():
+if ldir.is_symlink():
+    fail("lessons/", "is a symlink — the managed directory must be a real directory inside the repo")
+elif not ldir.is_dir():
     if sections:
         fail("lessons/", f"directory missing but knowledge.md has {len(sections)} day section(s)")
     else:
@@ -430,10 +491,10 @@ else:
             continue
         day_lines = sanitize(raw)
         problems: list[str] = list(unclosed)
-        first = next((ln for ln in day_lines if ln.strip()), "")
+        first = next((ln for ln in day_lines if ln.strip() and not is_mark(ln)), "")   # comments and code are skipped, not counted
         hm = DAY_H1_RE.match(first)
         if not hm:
-            problems.append(f"first visible line must be `# Lessons — {d}`, got {first.replace(FENCE_MARK, '<fenced code block>')[:40]!r}")
+            problems.append(f"first visible line must be `# Lessons — {d}`, got {first[:40]!r}")
         elif hm.group(1) != d:
             problems.append(f"H1 date {hm.group(1)} does not match filename {d}")
         stray_headings = [ln.strip() for ln in day_lines if H2_RE.match(ln)]
@@ -473,7 +534,9 @@ else:
 
 # --- verified/ -------------------------------------------------------------
 vdir = ROOT / "verified"
-if not vdir.is_dir():
+if vdir.is_symlink():
+    fail("verified/", "is a symlink — the managed directory must be a real directory inside the repo")
+elif not vdir.is_dir():
     warn("verified/", "directory missing")
 else:
     ventries = sorted(vdir.iterdir())                           # every entry, not only *.md
@@ -492,7 +555,7 @@ else:
         if lines is None:
             return None
         for ln in sanitize(lines):
-            if ln.strip():
+            if ln.strip() and not is_mark(ln):
                 return ln
         return ""
     firsts = {p.name: first_nonblank(p) for p in vfiles}
