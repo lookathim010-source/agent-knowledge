@@ -40,4 +40,4 @@ Connector runs are not logged there; their trail is the git history of
 
 `.markdownlint.yml` is lenient on purpose (no line-length rule, inline HTML
 allowed) so connector output passes unchanged. Run
-`npx markdownlint-cli2 "**/*.md"` before opening a PR.
+`npx markdownlint-cli2@0.23.3 "**/*.md"` (the version CI pins) before opening a PR.

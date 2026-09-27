@@ -13,8 +13,8 @@ has the shape every reader relies on:
                  no orphans, no `## ` headings of its own, and lesson
                  content identical (title, why, do, source) to that day's
                  section in knowledge.md, in the same order
-  verified/      files named YYYY-MM-DD_topic_vN.md (real dates) starting
-                 with an H1
+  verified/      readable files named YYYY-MM-DD_topic_vN.md (real dates)
+                 whose first non-blank line is a real H1 (not indented 4+)
 
 Contract: one line per check (PASS|WARN|FAIL name evidence), final RESULT
 line, exit 0 only when nothing FAILed. `--json` prints one JSON object.
@@ -37,13 +37,14 @@ KNOWLEDGE_H1 = "# daily-dev-agentic knowledge — T agent"   # the connector dep
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SECTION_RE = re.compile(r"^## (\d{4}-\d{2}-\d{2})\s*$")
 LESSON_RE = re.compile(r"^- \*\*(.+?)\*\*\s*$")                 # well-formed bold lesson bullet
-TOP_BULLET_RE = re.compile(r"^- \S")                           # any top-level bullet
+TOP_BULLET_RE = re.compile(r"^(?:[-*+]|\d+[.)]) +\S")           # any top-level list item, any marker
 WHY_RE = re.compile(r"^  - Why it matters here: (\S.*)$")
 DO_RE = re.compile(r"^  - Do: (\S.*)$")
 SOURCE_RE = re.compile(r"^  - Source: \[[^\]]+\]\(https?://[^)\s]+\).*confidence (\d{1,3})%")
 VERIFIED_NAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_[a-z0-9-]+_v\d+\.md$")
+H1_LINE_RE = re.compile(r"^ {0,3}# \S")   # a real ATX H1: at most 3 leading spaces (4 = code block)
 FIELDS = ("why", "do", "source")
-H2_RE = re.compile(r"^## ")
+H2_RE = re.compile(r"^##(?:\s|$)")   # any ATX H2, including a bare `##`
 bad_headings: list[str] = []   # filled by parse_lessons: H2s that are not valid day headings
 
 
@@ -119,7 +120,7 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
             sections[current].append(lesson)
             continue
         if TOP_BULLET_RE.match(ln):
-            lesson = new_lesson("MALFORMED: " + ln[2:].strip(), malformed=True)
+            lesson = new_lesson("MALFORMED: " + ln.split(None, 1)[1].strip(), malformed=True)
             sections[current].append(lesson)
             continue
         if lesson is None:
@@ -196,7 +197,7 @@ else:
         ok("knowledge:lesson-shape", "every lesson is a bold bullet with non-empty why / do / source (confidence 0-100)")
     empty = [d for d, ls in sections.items() if not ls]
     if empty:
-        warn("knowledge:empty-days", f"day sections with no lessons: {empty}")
+        fail("knowledge:empty-days", f"day sections with no recognizable lessons: {empty}")
 
 # --- lessons/ --------------------------------------------------------------
 ldir = ROOT / "lessons"
@@ -270,15 +271,24 @@ vdir = ROOT / "verified"
 if not vdir.is_dir():
     warn("verified/", "directory missing")
 else:
-    vfiles = sorted(p for p in vdir.glob("*.md"))
+    ventries = sorted(vdir.glob("*.md"))
+    vunreadable = [p.name for p in ventries if not p.is_file()]
+    if vunreadable:
+        fail("verified:readable", f"not readable regular files: {vunreadable}")
+    vfiles = [p for p in ventries if p.is_file()]
     badnames = [p.name for p in vfiles if not VERIFIED_NAME_RE.match(p.name) or not valid_date(p.name[:10])]
     if badnames:
         fail("verified:names", f"not a real YYYY-MM-DD_topic_vN.md: {badnames}")
     else:
         ok("verified:names", f"{len(vfiles)} sheet(s), all dated and versioned")
-    noh1 = [p.name for p in vfiles if not p.read_text(encoding="utf-8").lstrip().startswith("# ")]
+    def first_nonblank(p: pathlib.Path) -> str:
+        for ln in p.read_text(encoding="utf-8").splitlines():
+            if ln.strip():
+                return ln
+        return ""
+    noh1 = [p.name for p in vfiles if not H1_LINE_RE.match(first_nonblank(p))]
     if noh1:
-        fail("verified:h1", f"no H1: {noh1}")
+        fail("verified:h1", f"first non-blank line is not an H1 (indent ≤3, `# `): {noh1}")
     elif vfiles:
         ok("verified:h1", "every sheet starts with an H1")
 
