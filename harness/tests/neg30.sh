@@ -57,19 +57,26 @@ pos "P2+ comment-after-title" t2b
 t2c() { both 'LESSON=["- <span>**Wrapped title**</span>","  - Why it matters here: x","  - Do: y",'"$F"']'"$INS"; }
 run "P2++ raw-html-around-title" "not-a-bold-lesson-bullet" t2c
 
-# P3 (4117250134): only real markup nodes are removed or normalized — never attribute values or raw text
-t3() { split 'LESSON=["- **Attr comment**","  - Why it matters here: x","  - Do: <input value=\"<!-- A -->\">",'"$F"']'"$INS" \
-             'LESSON=["- **Attr comment**","  - Why it matters here: x","  - Do: <input value=\"<!-- B -->\">",'"$F"']'"$INS"; }
+# P3 (4117250134): only real markup nodes are removed or normalized — never attribute values or raw text.
+#    (Each Do: carries plain text beside the raw HTML, so the copy comparison alone decides the case.)
+t3() { split 'LESSON=["- **Attr comment**","  - Why it matters here: x","  - Do: type <input value=\"<!-- A -->\">",'"$F"']'"$INS" \
+             'LESSON=["- **Attr comment**","  - Why it matters here: x","  - Do: type <input value=\"<!-- B -->\">",'"$F"']'"$INS"; }
 run "P3 comment-like-text-in-attribute-is-content" "same title, different content" t3
-t3b() { split 'LESSON=["- **Textarea comment**","  - Why it matters here: x","  - Do: <textarea><!-- A --></textarea> y",'"$F"']'"$INS" \
-              'LESSON=["- **Textarea comment**","  - Why it matters here: x","  - Do: <textarea><!-- B --></textarea> y",'"$F"']'"$INS"; }
+t3b() { split 'LESSON=["- **Textarea comment**","  - Why it matters here: x","  - Do: type <textarea><!-- A --></textarea> y",'"$F"']'"$INS" \
+              'LESSON=["- **Textarea comment**","  - Why it matters here: x","  - Do: type <textarea><!-- B --></textarea> y",'"$F"']'"$INS"; }
 run "P3+ comment-like-text-in-textarea-is-content" "same title, different content" t3b
-t3c() { split 'LESSON=["- **Attr space**","  - Why it matters here: x","  - Do: <input value=\"a  b\"> y",'"$F"']'"$INS" \
-              'LESSON=["- **Attr space**","  - Why it matters here: x","  - Do: <input value=\"a b\"> y",'"$F"']'"$INS"; }
+t3c() { split 'LESSON=["- **Attr space**","  - Why it matters here: x","  - Do: type <input value=\"a  b\"> y",'"$F"']'"$INS" \
+              'LESSON=["- **Attr space**","  - Why it matters here: x","  - Do: type <input value=\"a b\"> y",'"$F"']'"$INS"; }
 run "P3++ attribute-whitespace-is-not-collapsed" "same title, different content" t3c
-t3d() { split 'LESSON=["- **Tooltip**","  - Why it matters here: x","  - Do: <abbr title=\"a <p> b\">y</abbr>",'"$F"']'"$INS" \
-              'LESSON=["- **Tooltip**","  - Why it matters here: x","  - Do: <abbr title=\"a <p>b\">y</abbr>",'"$F"']'"$INS"; }
+t3d() { split 'LESSON=["- **Tooltip**","  - Why it matters here: x","  - Do: see <abbr title=\"a <p> b\">y</abbr>",'"$F"']'"$INS" \
+              'LESSON=["- **Tooltip**","  - Why it matters here: x","  - Do: see <abbr title=\"a <p>b\">y</abbr>",'"$F"']'"$INS"; }
 run "P3+++ block-tag-text-inside-attribute-is-content" "same title, different content" t3d
+t3f() { split 'LESSON=["- **Quoted gt**","  - Why it matters here: x","  - Do: see <abbr title=\"a > b  c\">y</abbr>",'"$F"']'"$INS" \
+              'LESSON=["- **Quoted gt**","  - Why it matters here: x","  - Do: see <abbr title=\"a > b c\">y</abbr>",'"$F"']'"$INS"; }
+run "P3+++++ gt-inside-quoted-value-does-not-end-the-tag" "same title, different content" t3f
+t3g() { split 'LESSON=["- **Quoted comment**","  - Why it matters here: x","  - Do: see <abbr title=\"a > <!-- A -->\">y</abbr>",'"$F"']'"$INS" \
+              'LESSON=["- **Quoted comment**","  - Why it matters here: x","  - Do: see <abbr title=\"a > <!-- B -->\">y</abbr>",'"$F"']'"$INS"; }
+run "P3++++++ comment-after-gt-inside-quoted-value-is-content" "same title, different content" t3g
 t3e() { split 'LESSON=["- **Real comment**","  - Why it matters here: x","  - Do: y <!-- A --> z",'"$F"']'"$INS" \
               'LESSON=["- **Real comment**","  - Why it matters here: x","  - Do: y <!-- B --> z",'"$F"']'"$INS"; }
 pos "P3++++ real-comments-stay-invisible" t3e
