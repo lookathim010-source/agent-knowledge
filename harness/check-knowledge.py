@@ -37,17 +37,17 @@ RESULTS: list[dict] = []
 KNOWLEDGE_H1 = "# daily-dev-agentic knowledge — T agent"   # the connector depends on this exact line
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-SECTION_RE = re.compile(r"^## (\d{4}-\d{2}-\d{2})\s*$")
-LESSON_RE = re.compile(r"^- \*\*(.+?)\*\*\s*$")                 # well-formed bold lesson bullet
-TOP_BULLET_RE = re.compile(r"^(?:[-*+]|\d+[.)]) +\S")           # any top-level list item, any marker
-FIELD_LABEL_RE = re.compile(r"^  - (Why it matters here|Do|Source):(.*)$")   # label first, value validated after
+SECTION_RE = re.compile(r"^ {0,3}## (\d{4}-\d{2}-\d{2})\s*$")
+LESSON_RE = re.compile(r"^ {0,3}- \*\*(.+?)\*\*\s*$")           # well-formed bold lesson bullet (≤3-space indent is still top level)
+TOP_BULLET_RE = re.compile(r"^ {0,3}(?:[-*+]|\d+[.)]) +\S")     # any top-level list item, any marker, ≤3-space indent
+FIELD_LABEL_RE = re.compile(r"^\s*- (Why it matters here|Do|Source):(.*)$")   # label first, value validated after (nesting checked by indent)
 LINK_LABEL = r"\[(?:\\.|[^\]\\])+\]"                                          # allows escaped \] inside the label
 SOURCE_VALUE_RE = re.compile(r"^ " + LINK_LABEL + r"\(https?://[^)\s]+\).*confidence (\d{1,3})%")
 DAY_H1_RE = re.compile(r"^# Lessons — (\d{4}-\d{2}-\d{2})\s*$")
 VERIFIED_NAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_[a-z0-9-]+_v\d+\.md$")
 H1_LINE_RE = re.compile(r"^ {0,3}# \S")   # a real ATX H1: at most 3 leading spaces (4 = code block)
 FIELDS = ("why", "do", "source")
-H2_RE = re.compile(r"^##(?:\s|$)")   # any ATX H2, including a bare `##`
+H2_RE = re.compile(r"^ {0,3}##(?:\s|$)")   # any ATX H2 (≤3-space indent), including a bare `##`
 bad_headings: list[str] = []   # filled by parse_lessons: H2s that are not valid day headings
 
 
@@ -80,7 +80,17 @@ def norm(s: str) -> str:
     return " ".join(s.split())
 
 
+def read_lines(p: pathlib.Path) -> list[str] | None:
+    """Lines of a UTF-8 text file, or None (with a FAIL recorded) when it is not valid UTF-8."""
+    try:
+        return p.read_text(encoding="utf-8").splitlines()
+    except UnicodeDecodeError as exc:
+        fail(f"utf8:{p.name}", f"not valid UTF-8 at byte {exc.start}: {exc.reason}")
+        return None
+
+
 FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+CODE_SPAN_RE = re.compile(r"(`+)(?!`)(?:.+?)(?<!`)\1(?!`)")   # CommonMark-ish: matching backtick runs
 unclosed: list[str] = []   # filled by sanitize: a fence or comment still open at end of file
 
 
@@ -117,21 +127,24 @@ def sanitize(lines: list[str]) -> list[str]:
             fence_char, fence_len = m.group(1)[0], len(m.group(1))
             out.append("")
             continue
+        # Inline code spans are opaque: a <!-- inside `…` is code, not a comment opener.
+        # Mask them (same length, harmless chars) for delimiter scanning; restore text after.
+        scan = CODE_SPAN_RE.sub(lambda m: "`" * len(m.group(0)), ln)
         buf: list[str] = []
         i = 0
-        while i < len(ln):
+        while i < len(scan):
             if in_comment:
-                j = ln.find("-->", i)
+                j = scan.find("-->", i)
                 if j < 0:
-                    i = len(ln)
+                    i = len(scan)
                 else:
                     in_comment = False
                     i = j + 3
             else:
-                j = ln.find("<!--", i)
+                j = scan.find("<!--", i)
                 if j < 0:
                     buf.append(ln[i:])
-                    i = len(ln)
+                    i = len(scan)
                 else:
                     buf.append(ln[i:j])
                     in_comment = True
@@ -162,7 +175,7 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
     lines = sanitize(lines)
 
     def new_lesson(title: str, malformed: bool) -> dict:
-        return {"title": norm(title), "why": "", "do": "", "source": "",
+        return {"title": norm(title), "why": "", "do": "", "source": "", "indent": 0,
                 "seen": {"why": False, "do": False, "source": False},
                 "problems": (["not-a-bold-lesson-bullet"] if malformed else [])}
 
@@ -183,16 +196,22 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
             continue
         if current is None:
             continue
-        m = LESSON_RE.match(ln)
-        if m:
-            lesson = new_lesson(m.group(1), malformed=False)
-            sections[current].append(lesson)
-            continue
-        if TOP_BULLET_RE.match(ln):
-            lesson = new_lesson("MALFORMED: " + ln.split(None, 1)[1].strip(), malformed=True)
-            sections[current].append(lesson)
-            continue
-        if lesson is None:
+        indent = len(ln) - len(ln.lstrip(" "))
+        # CommonMark: a line indented at or past the current lesson's content column
+        # (its own indent + 2 for "- ") belongs to that lesson; anything shallower is a sibling.
+        nested = lesson is not None and indent >= lesson["indent"] + 2
+        if not nested:
+            m = LESSON_RE.match(ln)
+            if m:
+                lesson = new_lesson(m.group(1), malformed=False)
+                lesson["indent"] = indent
+                sections[current].append(lesson)
+                continue
+            if TOP_BULLET_RE.match(ln):
+                lesson = new_lesson("MALFORMED: " + ln.strip().split(None, 1)[1].strip(), malformed=True)
+                lesson["indent"] = indent
+                sections[current].append(lesson)
+                continue
             continue
         m = FIELD_LABEL_RE.match(ln)
         if not m:
@@ -240,7 +259,7 @@ sections: dict[str, list[dict]] = {}
 if not kpath.is_file():
     fail("knowledge.md", "missing")
 else:
-    lines = kpath.read_text(encoding="utf-8").splitlines()
+    lines = read_lines(kpath) or []
     if lines and lines[0].rstrip() == KNOWLEDGE_H1:
         ok("knowledge:h1", "exact connector heading present")
     else:
@@ -311,7 +330,10 @@ else:
         p = ldir / f"{d}.md"
         if not p.is_file():
             continue
-        day_lines = sanitize(p.read_text(encoding="utf-8").splitlines())
+        raw = read_lines(p)
+        if raw is None:
+            continue
+        day_lines = sanitize(raw)
         problems: list[str] = list(unclosed)
         first = next((ln for ln in day_lines if ln.strip()), "")
         hm = DAY_H1_RE.match(first)
@@ -369,12 +391,16 @@ else:
         fail("verified:names", f"not a real YYYY-MM-DD_topic_vN.md: {badnames}")
     else:
         ok("verified:names", f"{len(vfiles)} sheet(s), all dated and versioned")
-    def first_nonblank(p: pathlib.Path) -> str:
-        for ln in p.read_text(encoding="utf-8").splitlines():
+    def first_nonblank(p: pathlib.Path) -> str | None:
+        lines = read_lines(p)
+        if lines is None:
+            return None
+        for ln in lines:
             if ln.strip():
                 return ln
         return ""
-    noh1 = [p.name for p in vfiles if not H1_LINE_RE.match(first_nonblank(p))]
+    firsts = {p.name: first_nonblank(p) for p in vfiles}
+    noh1 = [n for n, f in firsts.items() if f is not None and not H1_LINE_RE.match(f)]
     if noh1:
         fail("verified:h1", f"first non-blank line is not an H1 (indent ≤3, `# `): {noh1}")
     elif vfiles:
