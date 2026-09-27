@@ -4,9 +4,10 @@
 Proves that what the daily-dev-agentic connector (and hand edits) wrote still
 has the shape every reader relies on:
 
-  knowledge.md   H1, then `## YYYY-MM-DD` sections newest first; every lesson
-                 is a bold bullet with "Why it matters here", "Do:", and a
-                 "Source:" line carrying a link and a confidence percentage
+  knowledge.md   H1, then `## YYYY-MM-DD` sections (real calendar dates, no
+                 repeats) newest first; every top-level bullet in a section is
+                 a bold lesson with "Why it matters here", "Do:", and a
+                 "Source:" line carrying a link and a 0-100 confidence
   lessons/       one YYYY-MM-DD.md per day section in knowledge.md, no
                  orphans, and the same lessons (titles, order, shape) per day
   verified/      files named YYYY-MM-DD_topic_vN.md that start with an H1
@@ -18,6 +19,7 @@ Run:  python3 harness/check-knowledge.py [--json]
 """
 from __future__ import annotations
 
+import datetime
 import json
 import pathlib
 import re
@@ -29,7 +31,17 @@ RESULTS: list[dict] = []
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SECTION_RE = re.compile(r"^## (\d{4}-\d{2}-\d{2})\s*$")
 LESSON_RE = re.compile(r"^- \*\*.+\*\*\s*$")
-SOURCE_RE = re.compile(r"^\s+- Source: \[[^\]]+\]\(https?://[^)]+\).*confidence \d{1,3}%")
+SOURCE_RE = re.compile(r"^\s+- Source: \[[^\]]+\]\(https?://[^)]+\).*confidence (\d{1,3})%")
+PLAIN_BULLET_RE = re.compile(r"^- (?!\*\*)\S")   # a top-level bullet that is not a bold lesson
+
+
+def valid_date(s: str) -> bool:
+    """True only for a real ISO calendar date (rejects 2026-99-99)."""
+    try:
+        datetime.date.fromisoformat(s)
+        return True
+    except ValueError:
+        return False
 VERIFIED_NAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_[a-z0-9-]+_v\d+\.md$")
 
 
@@ -54,6 +66,9 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
 
     A repeated `## YYYY-MM-DD` heading is recorded as a duplicate and its
     lessons are appended to the first occurrence, so nothing is silently lost.
+    A top-level bullet inside a day section that is not a bold lesson is
+    recorded as a malformed lesson (why/do/source all False) so it FAILs the
+    shape check instead of vanishing from the count.
     """
     sections: dict[str, list[dict]] = {}
     duplicates: list[str] = []
@@ -75,19 +90,36 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
             lesson = {"why": False, "do": False, "source": False, "title": ln.strip().strip("-").strip().strip("*").strip()}
             sections[current].append(lesson)
             continue
+        if PLAIN_BULLET_RE.match(ln):
+            lesson = {"why": False, "do": False, "source": False, "malformed": True, "title": "MALFORMED: " + ln[2:].strip()[:50]}
+            sections[current].append(lesson)
+            continue
         if lesson is not None and ln.startswith("  - "):
             if "Why it matters here:" in ln:
                 lesson["why"] = True
             elif ln.strip().startswith("- Do:"):
                 lesson["do"] = True
-            elif SOURCE_RE.match(ln):
-                lesson["source"] = True
+            else:
+                sm = SOURCE_RE.match(ln)
+                if sm:
+                    lesson["source"] = 0 <= int(sm.group(1)) <= 100
+                    if not lesson["source"]:
+                        lesson["confidence_out_of_range"] = int(sm.group(1))
     return sections, duplicates
 
 
 def shape_errors(sections: dict[str, list[dict]]) -> list[str]:
-    """Names of missing lesson fields as 'date#n:field'."""
-    return [f"{d}#{i}:{k}" for d, ls in sections.items() for i, l in enumerate(ls, 1) for k in ("why", "do", "source") if not l[k]]
+    """Names of lesson-shape problems as 'date#n:field'."""
+    out: list[str] = []
+    for d, ls in sections.items():
+        for i, l in enumerate(ls, 1):
+            if l.get("malformed"):
+                out.append(f"{d}#{i}:not-a-bold-lesson-bullet")
+                continue
+            for k in ("why", "do", "source"):
+                if not l[k]:
+                    out.append(f"{d}#{i}:{k}" + (f"(confidence {l['confidence_out_of_range']}% out of 0-100)" if k == "source" and "confidence_out_of_range" in l else ""))
+    return out
 
 
 # --- knowledge.md ----------------------------------------------------------
@@ -115,6 +147,11 @@ else:
             fail("knowledge:unique-dates", f"day section repeated: {sorted(set(dup_dates))}")
         else:
             ok("knowledge:unique-dates", "no repeated day sections")
+        impossible = [d for d in dates if not valid_date(d)]
+        if impossible:
+            fail("knowledge:real-dates", f"not calendar dates: {impossible}")
+        else:
+            ok("knowledge:real-dates", "every day section is a real calendar date")
     bad = shape_errors(sections)
     if bad:
         fail("knowledge:lesson-shape", f"{len(bad)} missing field(s): " + ", ".join(bad[:6]))
@@ -127,12 +164,15 @@ else:
 # --- lessons/ --------------------------------------------------------------
 ldir = ROOT / "lessons"
 if not ldir.is_dir():
-    warn("lessons/", "directory missing")
+    if sections:
+        fail("lessons/", f"directory missing but knowledge.md has {len(sections)} day section(s)")
+    else:
+        warn("lessons/", "directory missing (no day sections to cover)")
 else:
     files = sorted(p.name for p in ldir.glob("*.md"))
-    stray = [f for f in files if not DATE_RE.match(f[:-3])]
+    stray = [f for f in files if not DATE_RE.match(f[:-3]) or not valid_date(f[:-3])]
     if stray:
-        fail("lessons:names", f"not YYYY-MM-DD.md: {stray}")
+        fail("lessons:names", f"not a real YYYY-MM-DD.md: {stray}")
     else:
         ok("lessons:names", f"{len(files)} file(s), all dated")
     missing = [d for d in sections if f"{d}.md" not in files]
@@ -175,9 +215,9 @@ if not vdir.is_dir():
     warn("verified/", "directory missing")
 else:
     vfiles = sorted(p for p in vdir.glob("*.md"))
-    badnames = [p.name for p in vfiles if not VERIFIED_NAME_RE.match(p.name)]
+    badnames = [p.name for p in vfiles if not VERIFIED_NAME_RE.match(p.name) or not valid_date(p.name[:10])]
     if badnames:
-        fail("verified:names", f"not YYYY-MM-DD_topic_vN.md: {badnames}")
+        fail("verified:names", f"not a real YYYY-MM-DD_topic_vN.md: {badnames}")
     else:
         ok("verified:names", f"{len(vfiles)} sheet(s), all dated and versioned")
     noh1 = [p.name for p in vfiles if not p.read_text(encoding="utf-8").lstrip().startswith("# ")]
