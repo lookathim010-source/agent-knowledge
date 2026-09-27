@@ -39,7 +39,7 @@ KNOWLEDGE_H1 = "# daily-dev-agentic knowledge — T agent"   # the connector dep
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SECTION_RE = re.compile(r"^ {0,3}## (\d{4}-\d{2}-\d{2})\s*$")
 LESSON_RE = re.compile(r"^ {0,3}- \*\*(.+?)\*\*\s*$")           # well-formed bold lesson bullet (≤3-space indent is still top level)
-TOP_BULLET_RE = re.compile(r"^ {0,3}(?:[-*+]|\d+[.)]) +\S")     # any top-level list item, any marker, ≤3-space indent
+TOP_BULLET_RE = re.compile(r"^ {0,3}(?:[-*+]|\d+[.)])(?: +\S|\s*$)")   # any top-level list item incl. an EMPTY one, any marker, ≤3-space indent
 FIELD_LABEL_RE = re.compile(r"^\s*- (Why it matters here|Do|Source):(.*)$")   # label first, value validated after (nesting checked by indent)
 LINK_LABEL = r"\[(?:\\.|[^\]\\])+\]"                                          # allows escaped \] inside the label
 SOURCE_VALUE_RE = re.compile(r"^ " + LINK_LABEL + r"\(https?://[^)\s]+\).*confidence (\d{1,3})%")
@@ -175,7 +175,7 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
     lines = sanitize(lines)
 
     def new_lesson(title: str, malformed: bool) -> dict:
-        return {"title": norm(title), "why": "", "do": "", "source": "", "indent": 0,
+        return {"title": norm(title), "why": "", "do": "", "source": "", "indent": 0, "last": None,
                 "seen": {"why": False, "do": False, "source": False},
                 "problems": (["not-a-bold-lesson-bullet"] if malformed else [])}
 
@@ -208,16 +208,34 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
                 sections[current].append(lesson)
                 continue
             if TOP_BULLET_RE.match(ln):
-                lesson = new_lesson("MALFORMED: " + ln.strip().split(None, 1)[1].strip(), malformed=True)
+                parts = ln.strip().split(None, 1)
+                lesson = new_lesson("MALFORMED: " + (parts[1].strip() if len(parts) > 1 else "(empty list item)"), malformed=True)
                 lesson["indent"] = indent
                 sections[current].append(lesson)
                 continue
             continue
+        # Nested line. A child list marker is valid only at indent lesson+2 .. lesson+5
+        # (CommonMark: ≥ content column + 4 is an indented code block, not a list).
         m = FIELD_LABEL_RE.match(ln)
+        if m and indent >= lesson["indent"] + 6:
+            lesson["problems"].append(f"field '{m.group(1)}' indented {indent} spaces renders as code, not a nested bullet")
+            lesson["last"] = None
+            continue
         if not m:
+            # continuation text (lazy or indented) belongs to the field above it — or to the title
+            text = ln.strip()
+            if text and lesson["last"] is not None:
+                key = lesson["last"]
+                if key == "source":
+                    lesson["source"] = norm(lesson["source"] + " " + text) if lesson["source"] else lesson["source"]
+                else:
+                    lesson[key] = norm(lesson[key] + " " + text)
+            elif text and lesson["last"] is None and not lesson["seen"]["why"] and not lesson["seen"]["do"] and not lesson["seen"]["source"]:
+                lesson["title"] = norm(lesson["title"] + " " + text)
             continue
         label, value = m.group(1), m.group(2)
         key = {"Why it matters here": "why", "Do": "do", "Source": "source"}[label]
+        lesson["last"] = key
         if lesson["seen"][key]:
             lesson["problems"].append(f"duplicate {key}")
         lesson["seen"][key] = True
