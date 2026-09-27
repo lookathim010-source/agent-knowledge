@@ -4,13 +4,13 @@
 Proves that what the daily-dev-agentic connector (and hand edits) wrote still
 has the shape every reader relies on:
 
-  knowledge.md   the exact connector H1, then `## YYYY-MM-DD` sections (real
-                 calendar dates, no repeats) newest first; every top-level
+  knowledge.md   the exact connector H1, then only `## YYYY-MM-DD` sections
+                 (real calendar dates, no repeats, no other H2s) newest first; every top-level
                  bullet in a section is a bold lesson with a non-empty
                  "Why it matters here:", a non-empty "Do:", and a "Source:"
                  line carrying a link and a 0-100 confidence
-  lessons/       one YYYY-MM-DD.md per day section in knowledge.md, no
-                 orphans, no `## date` headings of its own, and lesson
+  lessons/       one readable YYYY-MM-DD.md per day section in knowledge.md,
+                 no orphans, no `## ` headings of its own, and lesson
                  content identical (title, why, do, source) to that day's
                  section in knowledge.md, in the same order
   verified/      files named YYYY-MM-DD_topic_vN.md (real dates) starting
@@ -43,6 +43,8 @@ DO_RE = re.compile(r"^  - Do: (\S.*)$")
 SOURCE_RE = re.compile(r"^  - Source: \[[^\]]+\]\(https?://[^)\s]+\).*confidence (\d{1,3})%")
 VERIFIED_NAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_[a-z0-9-]+_v\d+\.md$")
 FIELDS = ("why", "do", "source")
+H2_RE = re.compile(r"^## ")
+bad_headings: list[str] = []   # filled by parse_lessons: H2s that are not valid day headings
 
 
 def record(status: str, name: str, detail: str) -> None:
@@ -88,6 +90,7 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
     duplicates: list[str] = []
     current: str | None = None
     lesson: dict | None = None
+    bad_headings.clear()
 
     def new_lesson(title: str, malformed: bool) -> dict:
         return {"title": norm(title), "why": "", "do": "", "source": "",
@@ -101,6 +104,11 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
                 duplicates.append(current)
             else:
                 sections[current] = []
+            lesson = None
+            continue
+        if H2_RE.match(ln):                       # an H2 that is not `## YYYY-MM-DD`
+            bad_headings.append(ln.strip())
+            current = None                        # nothing after it belongs to a day
             lesson = None
             continue
         if current is None:
@@ -158,7 +166,12 @@ else:
     else:
         fail("knowledge:h1", f"first line must be {KNOWLEDGE_H1!r}, got {(lines[0] if lines else '')[:70]!r}")
     sections, dup_dates = parse_lessons(lines)
+    k_bad_headings = list(bad_headings)
     dates = list(sections)
+    if k_bad_headings:
+        fail("knowledge:headings", f"H2 headings that are not `## YYYY-MM-DD`: {k_bad_headings[:4]}")
+    else:
+        ok("knowledge:headings", "every H2 is a day heading")
     if not dates:
         fail("knowledge:sections", "no `## YYYY-MM-DD` sections")
     else:
@@ -193,7 +206,11 @@ if not ldir.is_dir():
     else:
         warn("lessons/", "directory missing (no day sections to cover)")
 else:
-    files = sorted(p.name for p in ldir.glob("*.md"))
+    entries = sorted(ldir.glob("*.md"))
+    unreadable = [p.name for p in entries if not p.is_file()]   # dangling symlinks, directories
+    if unreadable:
+        fail("lessons:readable", f"not readable regular files: {unreadable}")
+    files = [p.name for p in entries if p.is_file()]
     stray = [f for f in files if not DATE_RE.match(f[:-3]) or not valid_date(f[:-3])]
     if stray:
         fail("lessons:names", f"not a real YYYY-MM-DD.md: {stray}")
@@ -213,11 +230,11 @@ else:
             continue
         day_lines = p.read_text(encoding="utf-8").splitlines()
         problems: list[str] = []
-        stray_headings = [ln.strip() for ln in day_lines if SECTION_RE.match(ln)]
+        stray_headings = [ln.strip() for ln in day_lines if H2_RE.match(ln)]
         if stray_headings:
-            problems.append(f"contains day heading(s) {stray_headings} — a per-day file must not re-date its lessons")
-        # A per-day file carries no `## date` heading of its own: parse it as that day's section.
-        day_sections, _ = parse_lessons([f"## {d}"] + [ln for ln in day_lines if not SECTION_RE.match(ln)])
+            problems.append(f"contains H2 heading(s) {stray_headings[:4]} — a per-day file has no `## ` headings")
+        # A per-day file carries no `## ` heading of its own: parse it as that day's section.
+        day_sections, _ = parse_lessons([f"## {d}"] + [ln for ln in day_lines if not H2_RE.match(ln)])
         day_lessons = day_sections.get(d, [])
         bad_day = shape_errors({d: day_lessons})
         if bad_day:
