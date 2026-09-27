@@ -278,5 +278,30 @@
   "id": "raw-div-field-value",
   "markdown": "- Why it matters here:\n\n  <div hidden>x</div>\n",
   "why": "a type-6 HTML block as a field's only content"
+ },
+ {
+  "id": "script-block-quoted-end",
+  "markdown": "- Do: y\n\n  <script data-end=\"</script>\">\n\n- next\n",
+  "why": "CommonMark ends a type-1 block at `</script>` even inside an attribute"
+ },
+ {
+  "id": "empty-heading-in-field",
+  "markdown": "- Do:\n\n  ###\n",
+  "why": "an empty ATX heading inside a field item"
+ },
+ {
+  "id": "rule-in-field",
+  "markdown": "- Do:\n\n  ***\n",
+  "why": "a thematic break inside a field item"
+ },
+ {
+  "id": "label-glued-to-link",
+  "markdown": "Source: [T](https://x.y)confidence 80%\n",
+  "why": "text directly after a link"
+ },
+ {
+  "id": "link-text-leading-space",
+  "markdown": "Do: x[ y](https://x.y)\n",
+  "why": "a link whose text starts with a space"
  }
 ]

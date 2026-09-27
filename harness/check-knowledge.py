@@ -46,7 +46,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 try:
-    from knowledge_md import MD, VOID_TAGS, html_segments   # CommonMark parser + browser-faithful HTML tokenizer
+    from knowledge_md import MD, VOID_TAGS, html_open_at_end, html_segments   # CommonMark + browser-faithful HTML
 except Exception as exc:                              # missing, or a release whose internals the patches no longer fit
     _why = ("markdown-it-py is not installed" if isinstance(exc, ImportError) and "markdown_it" in str(exc)
             else f"markdown-it-py failed to load ({type(exc).__name__}: {exc})")
@@ -182,14 +182,17 @@ class Doc:
                 if not re.fullmatch(closer, last):
                     out.append(f"fenced code block opened with {t.markup} never closes")
             elif t.type == "html_block":
-                c = t.content.lstrip(" ")
-                for opener, end in HTML_ENDS:
+                c, msg = t.content.lstrip(" "), None
+                for opener, end in HTML_ENDS:             # CommonMark: the block swallows Markdown until its end marker
                     m = opener.match(c)
                     if m:
                         end = end or f"</{m.group(1).lower()}>"
                         if end not in c.lower():  # CommonMark tests the whole line: `<?>` and `<!-->` close at once
-                            out.append("HTML comment never closes" if end == "-->" else f"HTML block never closes (no {end!r})")
+                            msg = "comment" if end == "-->" else f"no {end!r}"
                         break
+                msg = msg or html_open_at_end(t.content)  # the browser: still inside a tag, comment or raw-text element
+                if msg:
+                    out.append("HTML comment never closes" if msg == "comment" else f"HTML block never closes ({msg})")
         return out
 
 
@@ -201,10 +204,12 @@ def walk(n: Node):
 
 def visible_html(html: str) -> str:
     """Rendered HTML reduced to what a reader can tell apart. Markup a browser never displays is
-    removed by a browser-faithful tokenizer (knowledge_md.html_segments), so attribute values and
-    raw text are never touched. Text whitespace is collapsed outside <pre>/<code> and dropped next
-    to block boundaries, unless something in the HTML shows whitespace as written: then only the
-    removal applies."""
+    removed by a browser-faithful tokenizer (knowledge_md.html_segments), so tags, attribute values
+    and raw text stay byte-exact. Text whitespace is collapsed the way CSS does in normal flow —
+    runs become one space, also across inline element boundaries, and none survives next to a block
+    boundary — except inside <pre>, <code> and elements that keep whitespace (textarea, xmp,
+    listing, plaintext, a style attribute). A <style> element can restyle anything, so a lesson
+    holding one is compared with whitespace exactly as written."""
     segs: list[tuple[str, str, str]] = []
     for seg in html_segments(html):
         if seg[0] == "text" and segs and segs[-1][0] == "text":
@@ -212,20 +217,37 @@ def visible_html(html: str) -> str:
         elif seg[0] != "hidden":
             segs.append(seg)
     text = [src.replace("<", "&lt;") if kind == "text" else src for kind, src, _ in segs]
-    if any(kind == "start" and (name in WS_KEEP_TAGS or STYLE_ATTR_RE.search(src)) for kind, src, name in segs):
+    if any(kind == "start" and name == "style" for kind, _, name in segs):
         return "".join(text).strip(WS)
-    verbatim = 0
+    keep: list[str] = []                                      # open elements whose whitespace is shown as written
+    last, space = None, True                                  # last collapsible text index; ends in (or at) a space
     for k, (kind, src, name) in enumerate(segs):
-        if kind in ("start", "end") and name in ("pre", "code"):
-            verbatim = verbatim + 1 if kind == "start" else max(0, verbatim - 1)
-        if kind != "text" or verbatim:
+        if kind in ("start", "end"):
+            if kind == "start" and name not in VOID_TAGS and (name in WS_KEEP_TAGS or name in ("pre", "code")
+                                                                or STYLE_ATTR_RE.search(src)):
+                keep.append(name)
+            elif kind == "end" and keep and keep[-1] == name:
+                keep.pop()
+            if name in BLOCK_TAGS:                            # a block boundary: no space survives on either side
+                if last is not None:
+                    text[last] = text[last].rstrip(" ")
+                last, space = None, True
+            elif kind == "start" and name in VOID_TAGS:       # an image or input is visible content
+                last, space = None, False
+            continue
+        if kind == "raw" or keep:
+            last, space = None, space and not src
             continue
         t = re.sub(r"[ \t\n\r\f]+", " ", text[k])
-        if k and segs[k - 1][0] in ("start", "end") and segs[k - 1][2] in BLOCK_TAGS:
-            t = t.lstrip(" ")
-        if k + 1 < len(segs) and segs[k + 1][0] in ("start", "end") and segs[k + 1][2] in BLOCK_TAGS:
-            t = t.rstrip(" ")
+        if space and t.startswith(" "):
+            t = t[1:]
+        elif t.startswith(" ") and last is not None:          # only inline tags since the last text: one canonical
+            text[last], t = text[last] + " ", t[1:]           # place for the space (`x<a> y` reads as `x <a>y`)
+        if t:
+            last, space = k, t.endswith(" ")
         text[k] = t
+    if last is not None:
+        text[last] = text[last].rstrip(" ")
     return "".join(text).strip(WS)
 
 
@@ -258,21 +280,29 @@ def invisible_inline(c) -> bool:
     return c.type == "html_inline" and all(kind == "hidden" for kind, _, _ in html_segments(c.content))
 
 
+def raw_step(stack: list[str], c) -> None:
+    """Follow raw HTML elements through an inline html token: a non-void start tag opens one; an end
+    tag closes it only when it matches the innermost open element (a stray end tag is ignored, so a
+    hidden region is never left early)."""
+    for kind, _, name in html_segments(c.content):
+        if kind == "start" and name not in VOID_TAGS:
+            stack.append(name)
+        elif kind == "end" and stack and stack[-1] == name:
+            stack.pop()
+
+
 def visible_text(tokens) -> str:
     """The text a reader is sure to see in a run of inline tokens. Formatting delimiters and
     never-displayed markup are zero-width; line breaks read as a space; code and images become SEP.
     A raw HTML tag, and everything inside a raw HTML element (it may be `hidden`, a template, or
     styled away), becomes SPLIT: it splits words but never counts as a value."""
-    out, depth = [], 0
+    out: list[str] = []
+    depth: list[str] = []
     for c in tokens:
         if c.type == "html_inline":
-            for kind, _, name in html_segments(c.content):
-                if kind == "start" and name not in VOID_TAGS:
-                    depth += 1
-                elif kind == "end":
-                    depth = max(0, depth - 1)
-                if kind != "hidden":
-                    out.append(SPLIT)
+            raw_step(depth, c)
+            if not invisible_inline(c):
+                out.append(SPLIT)
         elif depth:
             out.append(SPLIT)
         elif c.type == "text":
@@ -314,7 +344,8 @@ def parse_source(inline) -> int | None:
     close = next((j for j in range(k + 1, len(toks)) if toks[j].type == "link_close"), None)
     if close is None or not visible_text(toks[k + 1:close]).replace(SPLIT, "").strip(WS):   # needs a visible title
         return None
-    m = CONFIDENCE_RE.search(visible_text(toks[close + 1:]))
+    tail = visible_text(toks[k + 1:close])[-1:] + visible_text(toks[close + 1:])   # the link text's last character
+    m = CONFIDENCE_RE.search(tail, 1)                                              # takes part in the word boundary
     return int(m.group(1)) if m else None
 
 
@@ -338,11 +369,22 @@ def title_of(inline) -> tuple[str | None, bool]:
                 break
     if end is None:
         return None, False
-    title = "".join(c.content for c in ch[1:end] if c.type in ("text", "code_inline"))
+    title = visible_text(ch[1:end]).replace(SPLIT, "").replace(SEP, "")   # what a reader sees in the bold span
     rest = ch[end + 1:]
     if rest and rest[0].type not in ("softbreak", "hardbreak"):
         return None, False                        # `**a** b **c**`, `**foo***`: not one bold span
     return (title if title.strip(WS) else None), bool(rest)
+
+
+def has_value(doc: Doc, n: Node) -> bool:
+    """Does this block show a reader something: visible text, code or an image in Markdown (never
+    inside raw HTML, which may be hidden)? An empty heading or a rule does not."""
+    for t in doc.tokens[n.i:n.j + 1]:
+        if t.type == "inline" and visible_text(inline_tokens(t)).replace(SPLIT, "").strip(WS):
+            return True
+        if t.type in ("fence", "code_block") and t.content.strip(WS):
+            return True
+    return False
 
 
 def parse_lesson(doc: Doc, item: Node) -> dict:
@@ -379,7 +421,7 @@ def parse_lesson(doc: Doc, item: Node) -> dict:
             # empty = nothing a reader is sure to see after the label: not in the paragraph, and no
             # later Markdown block (raw HTML never counts as a value — it may be hidden)
             empty = (not visible_text(toks)[m.end():].replace(SPLIT, "").strip(WS)
-                     and not any(b.kind != "html_block" for b in fk[1:]))
+                     and not any(has_value(doc, b) for b in fk[1:]))
             if key == "source":
                 conf = None if empty else parse_source(para)
                 if conf is None:

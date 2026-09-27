@@ -85,11 +85,13 @@ EOF
 run "7 misplaced-lesson" "knowledge:misplaced" t7
 
 # 6-positive: a verified sheet that STARTS with a comment and then a real H1 must PASS
+# (routed through mutate(), and the sheet must be counted, so a fixture change cannot turn this into a no-op)
 n=$((n+1))
 rm -rf "$W/r"; cp -r "$SRC" "$W/r"; rm -rf "$W/r/.git"
-printf '<!-- lead comment -->\n\n# Real heading\n\nbody\n' > "$W/r/verified/2026-01-03_lead_v1.md"
+t6p() { printf '<!-- lead comment -->\n\n# Real heading\n\nbody\n' > verified/2026-01-03_lead_v1.md; }
+mutate t6p
 out=$(cd "$W/r" && python3 harness/check-knowledge.py 2>&1); rc=$?
-if [ $rc -eq 0 ]; then echo "PASS 6+ comment-then-H1 accepted"; else bad=$((bad+1)); echo "FAIL 6+ comment-then-H1 rejected:"; echo "$out" | sed 's/^/    /'; fi
+if [ $rc -eq 0 ] && printf '%s' "$out" | grep -q "verified:names .* 4 sheet(s)"; then echo "PASS 6+ comment-then-H1 accepted"; else bad=$((bad+1)); echo "FAIL 6+ comment-then-H1 rejected (or the sheet was not written):"; echo "$out" | sed 's/^/    /'; fi
 
 # 3-positive: `-\t**Title**` lesson with tab-marked fields in BOTH copies must PASS
 n=$((n+1))

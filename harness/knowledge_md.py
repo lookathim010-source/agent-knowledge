@@ -101,11 +101,11 @@ def _tag_end(s: str, i: int) -> int:
 
 def html_segments(html: str) -> list[tuple[str, str, str]]:
     """[(kind, source, tag name)] with kind "text", "start", "end", "raw" (a raw-text element's
-    content, or CDATA once svg/math appears) or "hidden" (a comment, PI, declaration, CDATA or
+    content, or CDATA inside svg/math) or "hidden" (a comment, PI, declaration, CDATA or
     `</>`: a browser never displays it). A tag cut off by the end of the input is kept, because in a
     fragment the browser would read on into whatever follows."""
     out: list[tuple[str, str, str]] = []
-    i, n, foreign = 0, len(html), False
+    i, n, foreign = 0, len(html), 0                         # foreign: open svg/math elements
     while i < n:
         j = html.find("<", i)
         if j < 0:
@@ -122,7 +122,8 @@ def html_segments(html: str) -> list[tuple[str, str, str]]:
             k = n if k < 0 else k
             end = html[j + 1] == "/"
             out.append(("end" if end else "start", html[j:k], name))
-            foreign = foreign or (not end and name in ("svg", "math"))
+            if name in ("svg", "math") and not html[j:k].endswith("/>"):
+                foreign = max(0, foreign - 1) if end else foreign + 1
             if not end and (name in RAWTEXT_TAGS or name == "plaintext"):
                 close = None if name == "plaintext" else re.compile(
                     r"</" + re.escape(name) + r"[\t\n\f\r />]", re.I).search(html, k)
@@ -153,3 +154,23 @@ def strip_hidden(html: str) -> str:
     so that removing a comment can never splice two pieces into a new tag."""
     return "".join(src.replace("<", "&lt;") if kind == "text" else src
                    for kind, src, _ in html_segments(html) if kind != "hidden")
+
+
+def html_open_at_end(html: str) -> str | None:
+    """Why a browser would still be inside something when this HTML ends — and so read on into
+    whatever follows — or None: a cut-off tag, comment or bogus comment, or an open raw-text element."""
+    segs = html_segments(html)
+    if not segs:
+        return None
+    kind, src, name = segs[-1]
+    if kind in ("start", "end") and _tag_end(src, 0) < 0:
+        return "a tag is cut off"
+    if kind == "hidden" and src.startswith("<!--") and not (src.endswith(("-->", "--!>")) or src in ("<!-->", "<!--->")):
+        return "comment"
+    if kind == "hidden" and not src.endswith(">"):
+        return "no '>'"
+    if kind == "raw" and not name and not src.endswith("]]>"):
+        return "no ']]>'"
+    if (kind == "raw" or kind == "start") and (name in RAWTEXT_TAGS or name == "plaintext"):
+        return f"<{name}> is still open"
+    return None

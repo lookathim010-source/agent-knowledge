@@ -66,7 +66,8 @@ def merge(toks: list) -> list:
 ATOMS = ["<", ">", "!", "-", "--", "?", "/", "=", '"', "'", " ", "\n", "\t", "a", "b", "x", "p", "div", "span",
          "input", "textarea", "title", "style", "xmp", "plaintext", "value", "<!--", "-->", "--!>", "<?", "<!",
          "</", "[CDATA[", "]]>", "DOCTYPE", "<a ", "<p>", "</p>", "<textarea>", "</textarea>", "<style>",
-         "</style", "<title>", "</title>", "<!-->", "<!--->", "=\"", "='", "<b/>", "</>"]
+         "</style", "<title>", "</title>", "<!-->", "<!--->", "=\"", "='", "<b/>", "</>", "PUBLIC", "SYSTEM",
+         "<!DOCTYPE "]
 
 cases = json.loads((pathlib.Path(__file__).parent / "html_cases.json").read_text(encoding="utf-8"))
 rng = random.Random(20260927)
