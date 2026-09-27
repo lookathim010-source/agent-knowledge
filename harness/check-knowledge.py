@@ -10,7 +10,8 @@ has the shape every reader relies on:
                  "Why it matters here:", a non-empty "Do:", and a "Source:"
                  line carrying a link and a 0-100 confidence
   lessons/       one readable YYYY-MM-DD.md per day section in knowledge.md,
-                 no orphans, no `## ` headings of its own, and lesson
+                 headed `# Lessons — <that date>`, no orphans, no `## `
+                 headings of its own, and lesson
                  content identical (title, why, do, source) to that day's
                  section in knowledge.md, in the same order
   verified/      only readable files named YYYY-MM-DD_topic_vN.md (real dates)
@@ -39,9 +40,10 @@ DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SECTION_RE = re.compile(r"^## (\d{4}-\d{2}-\d{2})\s*$")
 LESSON_RE = re.compile(r"^- \*\*(.+?)\*\*\s*$")                 # well-formed bold lesson bullet
 TOP_BULLET_RE = re.compile(r"^(?:[-*+]|\d+[.)]) +\S")           # any top-level list item, any marker
-WHY_RE = re.compile(r"^  - Why it matters here: (\S.*)$")
-DO_RE = re.compile(r"^  - Do: (\S.*)$")
-SOURCE_RE = re.compile(r"^  - Source: \[[^\]]+\]\(https?://[^)\s]+\).*confidence (\d{1,3})%")
+FIELD_LABEL_RE = re.compile(r"^  - (Why it matters here|Do|Source):(.*)$")   # label first, value validated after
+LINK_LABEL = r"\[(?:\\.|[^\]\\])+\]"                                          # allows escaped \] inside the label
+SOURCE_VALUE_RE = re.compile(r"^ " + LINK_LABEL + r"\(https?://[^)\s]+\).*confidence (\d{1,3})%")
+DAY_H1_RE = re.compile(r"^# Lessons — (\d{4}-\d{2}-\d{2})\s*$")
 VERIFIED_NAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_[a-z0-9-]+_v\d+\.md$")
 H1_LINE_RE = re.compile(r"^ {0,3}# \S")   # a real ATX H1: at most 3 leading spaces (4 = code block)
 FIELDS = ("why", "do", "source")
@@ -78,15 +80,44 @@ def norm(s: str) -> str:
     return " ".join(s.split())
 
 
-def strip_html_comments(lines: list[str]) -> list[str]:
-    """Blank out everything inside <!-- ... --> so commented-out content never counts as present.
+FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+unclosed: list[str] = []   # filled by sanitize: a fence or comment still open at end of file
 
-    Line count is preserved (commented text becomes empty) so positions stay meaningful.
+
+def sanitize(lines: list[str]) -> list[str]:
+    """Return what a reader sees as prose: fenced code and HTML comments blanked.
+
+    Single pass, CommonMark-shaped: inside a fence, nothing is interpreted (a
+    `<!--` in code cannot open a comment) and the block closes only on a fence
+    of the same character at least as long as the opener with nothing but
+    spaces after it. Inside a comment, nothing is interpreted (a ``` in a
+    comment cannot open a fence) until `-->`. Line count is preserved.
     """
     out: list[str] = []
+    fence_char: str | None = None
+    fence_len = 0
     in_comment = False
+    unclosed.clear()
     for ln in lines:
-        buf = []
+        if fence_char is not None:
+            m = FENCE_RE.match(ln)
+            if m and m.group(1)[0] == fence_char and len(m.group(1)) >= fence_len and m.group(2).strip() == "":
+                fence_char = None
+            out.append("")
+            continue
+        if in_comment:
+            j = ln.find("-->")
+            if j < 0:
+                out.append("")
+                continue
+            in_comment = False
+            ln = ln[j + 3:]          # the rest of the line is prose again
+        m = FENCE_RE.match(ln)
+        if m:
+            fence_char, fence_len = m.group(1)[0], len(m.group(1))
+            out.append("")
+            continue
+        buf: list[str] = []
         i = 0
         while i < len(ln):
             if in_comment:
@@ -106,34 +137,11 @@ def strip_html_comments(lines: list[str]) -> list[str]:
                     in_comment = True
                     i = j + 4
         out.append("".join(buf))
+    if fence_char is not None:
+        unclosed.append(f"fenced code block opened with {fence_char * fence_len} never closes")
+    if in_comment:
+        unclosed.append("HTML comment never closes")
     return out
-
-
-FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
-
-
-def blank_fenced_code(lines: list[str]) -> list[str]:
-    """Blank out fenced code blocks (``` or ~~~) so their contents never count as content."""
-    out: list[str] = []
-    fence: str | None = None
-    for ln in lines:
-        m = FENCE_RE.match(ln)
-        if fence is None and m:
-            fence = m.group(1)[0]   # opening fence character
-            out.append("")
-            continue
-        if fence is not None:
-            out.append("")
-            if m and m.group(1)[0] == fence:
-                fence = None
-            continue
-        out.append(ln)
-    return out
-
-
-def sanitize(lines: list[str]) -> list[str]:
-    """Lines with HTML comments and fenced code blanked; what a reader actually sees as prose."""
-    return blank_fenced_code(strip_html_comments(lines))
 
 
 def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
@@ -155,6 +163,7 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
 
     def new_lesson(title: str, malformed: bool) -> dict:
         return {"title": norm(title), "why": "", "do": "", "source": "",
+                "seen": {"why": False, "do": False, "source": False},
                 "problems": (["not-a-bold-lesson-bullet"] if malformed else [])}
 
     for ln in lines:
@@ -185,30 +194,34 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
             continue
         if lesson is None:
             continue
-        if (m := WHY_RE.match(ln)):
-            if lesson["why"]:
-                lesson["problems"].append("duplicate why")
-            lesson["why"] = norm(m.group(1))
-        elif (m := DO_RE.match(ln)):
-            if lesson["do"]:
-                lesson["problems"].append("duplicate do")
-            lesson["do"] = norm(m.group(1))
-        elif (m := SOURCE_RE.match(ln)):
-            if lesson["source"] or any(pr.startswith("confidence") for pr in lesson["problems"]):
-                lesson["problems"].append("duplicate source")
-            conf = int(m.group(1))
-            if 0 <= conf <= 100:
-                lesson["source"] = norm(ln.strip()[2:])
+        m = FIELD_LABEL_RE.match(ln)
+        if not m:
+            continue
+        label, value = m.group(1), m.group(2)
+        key = {"Why it matters here": "why", "Do": "do", "Source": "source"}[label]
+        if lesson["seen"][key]:
+            lesson["problems"].append(f"duplicate {key}")
+        lesson["seen"][key] = True
+        if key == "source":
+            sm = SOURCE_VALUE_RE.match(value)
+            if not sm:
+                lesson["problems"].append("source line is not `[title](https://…) … confidence N%`")
+            elif not 0 <= int(sm.group(1)) <= 100:
+                lesson["problems"].append(f"confidence {sm.group(1)}% out of 0-100")
             else:
-                lesson["problems"].append(f"confidence {conf}% out of 0-100")
+                lesson["source"] = norm(value)
+        elif value.strip():
+            lesson[key] = norm(value)
+        else:
+            lesson["problems"].append(f"missing or empty {key}")
 
     for ls in sections.values():
         for l in ls:
             if "not-a-bold-lesson-bullet" in l["problems"]:
                 continue
             for k in FIELDS:
-                if not l[k] and not (k == "source" and any(p.startswith("confidence") for p in l["problems"])):
-                    l["problems"].append(f"missing or empty {k}")
+                if not l["seen"][k]:
+                    l["problems"].append(f"missing {k}")
     return sections, duplicates
 
 
@@ -233,6 +246,9 @@ else:
     else:
         fail("knowledge:h1", f"first line must be {KNOWLEDGE_H1!r}, got {(lines[0] if lines else '')[:70]!r}")
     sections, dup_dates = parse_lessons(lines)
+    k_unclosed = list(unclosed)
+    if k_unclosed:
+        fail("knowledge:unclosed", "; ".join(k_unclosed) + " — everything after it is hidden from readers")
     k_bad_headings = list(bad_headings)
     dates = list(sections)
     if k_bad_headings:
@@ -296,7 +312,13 @@ else:
         if not p.is_file():
             continue
         day_lines = sanitize(p.read_text(encoding="utf-8").splitlines())
-        problems: list[str] = []
+        problems: list[str] = list(unclosed)
+        first = next((ln for ln in day_lines if ln.strip()), "")
+        hm = DAY_H1_RE.match(first)
+        if not hm:
+            problems.append(f"first line must be `# Lessons — {d}`, got {first[:40]!r}")
+        elif hm.group(1) != d:
+            problems.append(f"H1 date {hm.group(1)} does not match filename {d}")
         stray_headings = [ln.strip() for ln in day_lines if H2_RE.match(ln)]
         if stray_headings:
             problems.append(f"contains H2 heading(s) {stray_headings[:4]} — a per-day file has no `## ` headings")
