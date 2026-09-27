@@ -764,7 +764,7 @@ def sanitize(lines: list[str]) -> list[str]:
             block_base, block_quote = base, qd
             if mark == HTML_MARK:                    # a comment renders nothing: no payload to compare
                 block_at = len(out) - 1
-                block_text.append(qinner)
+                block_text.append(qinner.lstrip(" "))   # the opener's 0-3 spaces of indentation are not content
                 if not in_html:
                     close_block()
             continue
@@ -825,13 +825,14 @@ def parse_lessons(lines: list[str], *, presanitized: bool = False) -> tuple[dict
         # last  the open field's key; para  a paragraph is open (lazy continuation may follow);
         # pcol  the content column of the container that paragraph lives in (a Setext underline
         #       must sit there); tail  lesson-level prose after the fields — visible, so compared
-        return {"title": norm(title), "why": "", "do": "", "source": "", "source_raw": "", "tail": "", "order": [],
+        return {"title": title, "why": "", "do": "", "source": "", "source_raw": "", "tail": "", "order": [],
                 "col": 2, "fcol": None, "last": None, "hard": False, "para": False, "pcol": 0, "pq": 0, "code": None,
                 "seen": {"why": False, "do": False, "source": False},
                 "problems": (["not-a-bold-lesson-bullet"] if malformed else [])}
 
     def absorb(lesson: dict, ln: str, para: bool = False) -> None:
-        """Prose belongs to the open field — or, before any field, to the title when it continues
+        """Prose is gathered RAW here and normalised once the lesson is complete. It belongs to the
+        open field — or, before any field, to the title when it continues
         the title's own paragraph (a shape problem) and to the lesson's tail when it is a separate
         paragraph; after the fields, to the tail too. A hard line break on the previous line is
         kept as HARD_BREAK, and a new paragraph inside the item as PARA_BREAK, so two copies
@@ -843,17 +844,17 @@ def parse_lessons(lines: list[str], *, presanitized: bool = False) -> tuple[dict
         if lesson["last"] is not None:
             key = lesson["last"]
             if key == "source":
-                lesson["source_raw"] = norm(lesson["source_raw"] + sep + text)
+                lesson["source_raw"] = lesson["source_raw"] + sep + text
             else:
-                lesson[key] = norm(lesson[key] + sep + text)
+                lesson[key] = lesson[key] + sep + text
         elif not any(lesson["seen"].values()) and not para:
             # Same paragraph as the bold title: CommonMark renders this text OUTSIDE the closing `**`,
             # so the title paragraph is no longer one strong span.
-            lesson["title"] = norm(lesson["title"] + sep + text)
+            lesson["title"] = lesson["title"] + sep + text
             if "not-a-bold-lesson-bullet" not in lesson["problems"] and "title paragraph continues past the bold span" not in lesson["problems"]:
                 lesson["problems"].append("title paragraph continues past the bold span")
         else:
-            lesson["tail"] = norm(lesson["tail"] + sep + text)   # lesson-level prose outside title and fields: visible, so compared
+            lesson["tail"] = lesson["tail"] + sep + text       # lesson-level prose outside title and fields: visible, so compared
         lesson["hard"] = ends_hard(ln)
 
     def open_para(lesson: dict, col: int, qdepth: int = 0) -> None:
@@ -1009,7 +1010,13 @@ def parse_lessons(lines: list[str], *, presanitized: bool = False) -> tuple[dict
             # not this lesson's, so they must not reconnect. Unless it renders nothing (a comment block
             # or a reference definition) it is visible content that no lesson — and no day file — holds.
             lesson = None
-            if mark_kind(ln) != COMMENT_MARK and link_ref_def(ln) is None:
+            if title_may_follow and REF_TITLE_RE.match(ln):
+                continue                          # the title of the reference definition on the line above
+            rd = link_ref_def(ln)
+            if rd is not None:
+                ref_title_next = rd is False
+                continue
+            if mark_kind(ln) != COMMENT_MARK:
                 stray.append(mark_token(ln)[:60] if is_mark(ln) else ln.strip()[:60])
             continue
         # ---- nested line: inside the open lesson item ----
@@ -1062,9 +1069,9 @@ def parse_lessons(lines: list[str], *, presanitized: bool = False) -> tuple[dict
             # The value may continue on the next line(s); emptiness and the source shape are
             # judged once the whole field has been assembled (see the finalisation loop).
             if key == "source":
-                lesson["source_raw"] = norm(value)
+                lesson["source_raw"] = value
             else:
-                lesson[key] = norm(value)
+                lesson[key] = value
             continue
         if THEMATIC_RE.match(rel):                # a thematic break inside the item renders as <hr>: a visible block
             absorb(lesson, "⟨hr⟩", para=True)
@@ -1081,6 +1088,10 @@ def parse_lessons(lines: list[str], *, presanitized: bool = False) -> tuple[dict
         flush_code(lesson)
     for ls in sections.values():
         for l in ls:
+            # Text was gathered raw; normalise each assembled paragraph ONCE, so a code span that opens
+            # on one line and closes on a later one is seen whole and keeps its inner spaces.
+            for k in ("title", "why", "do", "source_raw", "tail"):
+                l[k] = norm(l[k])
             if "not-a-bold-lesson-bullet" in l["problems"]:
                 continue
             for k in FIELDS:
