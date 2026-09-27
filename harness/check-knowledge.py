@@ -107,6 +107,7 @@ def read_lines(p: pathlib.Path) -> list[str] | None:
 
 
 FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+FENCE_MARK = "\x00fence"   # left by sanitize() where a fenced block opened, at its indent: a block boundary, never text
 LIST_ITEM_RE = re.compile(r"^( *)([-*+]|\d{1,9}[.)])( +)\S")   # marker + 1..n spaces + content (for container tracking)
 CODE_SPAN_RE = re.compile(r"(`+)(?!`)(?:.+?)(?<!`)\1(?!`)")   # CommonMark-ish: matching backtick runs
 unclosed: list[str] = []   # filled by sanitize: a fence or comment still open at end of file
@@ -132,7 +133,10 @@ def sanitize(lines: list[str]) -> list[str]:
     spaces after it. Inside a comment, nothing is interpreted (a ``` in a
     comment cannot open a fence) until `-->`. Fences are recognised relative
     to the content column of the innermost open list item, so a code block
-    nested under a lesson field is code too. Line count is preserved.
+    nested under a lesson field is code too. The opener line is replaced by
+    FENCE_MARK at the fence's indent so the parser still sees a block boundary
+    there (a fence closes an open list item just as a heading does); the rest
+    of the block is blank. Line count is preserved.
     """
     out: list[str] = []
     fence_char: str | None = None
@@ -172,7 +176,7 @@ def sanitize(lines: list[str]) -> list[str]:
         # backtick (that line is an inline code span, not a fence); tilde fences may.
         if m and not (m.group(1)[0] == "`" and "`" in m.group(2)):
             fence_char, fence_len, fence_base = m.group(1)[0], len(m.group(1)), base
-            out.append("")
+            out.append(" " * (len(ln) - len(ln.lstrip(" "))) + FENCE_MARK)
             continue
         # Inline code spans are opaque: a <!-- inside `…` is code, not a comment opener.
         # Mask them (same length, harmless chars) for delimiter scanning; restore text after.
@@ -277,18 +281,21 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
                 sections[current].append(lesson)
                 continue
             if lesson is not None and ln.strip():
-                if not was_prev_blank and not INTERRUPT_RE.match(ln):
+                if not was_prev_blank and not INTERRUPT_RE.match(ln) and ln.strip() != FENCE_MARK:
                     # Lazy continuation (CommonMark): a non-blank, non-list line directly
                     # under a paragraph — even at indent 0 — is still that paragraph's text.
                     absorb(lesson, ln.strip())
                 else:
-                    # A heading, thematic break, block quote, or a paragraph after a blank
-                    # line closes the list: fields that follow render as a NEW list, not
-                    # as this lesson's, so they must not reconnect to it.
+                    # A heading, thematic break, block quote, fenced code block, or a
+                    # paragraph after a blank line closes the list: fields that follow
+                    # render as a NEW list, not as this lesson's, so they must not reconnect.
                     lesson = None
             continue
         # Nested line. A child list marker is valid only at indent lesson+2 .. lesson+5
         # (CommonMark: ≥ content column + 4 is an indented code block, not a list).
+        if ln.strip() == FENCE_MARK:
+            lesson["last"] = None     # a code block inside the item ends the paragraph; the lesson goes on
+            continue
         m = FIELD_LABEL_RE.match(ln)
         if m and indent >= lesson["indent"] + 6:
             lesson["problems"].append(f"field '{m.group(1)}' indented {indent} spaces renders as code, not a nested bullet")
@@ -426,7 +433,7 @@ else:
         first = next((ln for ln in day_lines if ln.strip()), "")
         hm = DAY_H1_RE.match(first)
         if not hm:
-            problems.append(f"first line must be `# Lessons — {d}`, got {first[:40]!r}")
+            problems.append(f"first visible line must be `# Lessons — {d}`, got {first.replace(FENCE_MARK, '<fenced code block>')[:40]!r}")
         elif hm.group(1) != d:
             problems.append(f"H1 date {hm.group(1)} does not match filename {d}")
         stray_headings = [ln.strip() for ln in day_lines if H2_RE.match(ln)]
