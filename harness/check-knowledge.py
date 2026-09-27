@@ -37,7 +37,7 @@ RESULTS: list[dict] = []
 
 KNOWLEDGE_H1 = "# daily-dev-agentic knowledge — T agent"   # the connector depends on this exact line
 
-CODE_SPAN_RE = re.compile(r"(`+)(?!`)(?:.+?)(?<!`)\1(?!`)")   # CommonMark-ish: matching backtick runs, within one string
+CODE_SPAN_RE = re.compile(r"(?<!\\)(`+)(?!`)(?:.+?)(?<!`)\1(?!`)")   # CommonMark-ish: matching, unescaped backtick runs
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SECTION_RE = re.compile(r"^ {0,3}## (\d{4}-\d{2}-\d{2})\s*$")
 LESSON_RE = re.compile(r"^ {0,3}-([ \t]+)\*\*(.+?)\*\*\s*$")     # bold lesson bullet: `-`, 1-4 columns of whitespace (checked after), **title**
@@ -46,12 +46,6 @@ FIELD_LABEL_RE = re.compile(r"^\s*-[ \t](Why it matters here|Do|Source):(.*)$") 
 # Blocks that interrupt a paragraph (CommonMark): an ATX heading, a block quote, a thematic break.
 # A line like this at top level is never lazy continuation of the lesson above it.
 THEMATIC_BREAK = r"(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$"   # 3+ of the SAME character (`- * -` is not a break)
-_HTML6 = ("address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|"
-          "fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|"
-          "menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul")
-HTML_BLOCK_RE = re.compile(   # CommonMark HTML block starts that CAN interrupt a paragraph (types 1-6); type 7 cannot
-    r"^ {0,3}(?:<(?:script|pre|style|textarea)(?:\s|>|$)|<!--|<\?|<![A-Za-z]|<!\[CDATA\[|</?(?:" + _HTML6 + r")(?:\s|/?>|$))",
-    re.IGNORECASE)
 INTERRUPT_RE = re.compile(r"^ {0,3}(?:#{1,6}(?:\s|$)|>|" + THEMATIC_BREAK + ")")
 LINK_LABEL = r"\[(?:\\.|[^\]\\])+\]"                                          # allows escaped \] inside the label
 LINK_OPEN_RE = re.compile(r"^" + LINK_LABEL + r"\(")                       # `[label](` — the destination is scanned by hand
@@ -72,8 +66,8 @@ def parse_source(text: str) -> tuple[str, int] | None:
     i, depth = m.end(), 0
     while i < len(text):
         c = text[i]
-        if c.isspace():
-            return None
+        if c.isspace() or c in "<>":
+            return None                              # a bare destination has no whitespace and no unescaped < >
         if c == "\\" and i + 1 < len(text) and text[i + 1] in ASCII_PUNCT:
             i += 2                                   # `\(` is destination text, not a delimiter
             continue
@@ -140,8 +134,9 @@ def ends_hard(ln: str) -> bool:
     """True when a following line would render after a hard line break, not a soft one."""
     if ln.endswith("  "):
         return True
-    body = ln.rstrip(" ")
-    return (len(body) - len(body.rstrip("\\"))) % 2 == 1
+    if not ln.endswith("\\"):
+        return False                                  # `text\ ` — the space, not the backslash, ends the line
+    return (len(ln) - len(ln.rstrip("\\"))) % 2 == 1
 
 
 def regular_file(p: pathlib.Path) -> bool:
@@ -160,19 +155,57 @@ def read_lines(p: pathlib.Path) -> list[str] | None:
     """Lines of a UTF-8 text file (a leading BOM is encoding metadata, not content, and is
     dropped), or None (with a FAIL recorded) when it is not valid UTF-8."""
     try:
-        return p.read_text(encoding="utf-8-sig").splitlines()
+        text = p.read_text(encoding="utf-8-sig")
     except UnicodeDecodeError as exc:
         fail(f"utf8:{p.name}", f"not valid UTF-8 at byte {exc.start}: {exc.reason}")
         return None
+    # CommonMark line endings are CR, LF and CRLF only; U+2028, U+000C etc. stay inside a line.
+    lines = re.split(r"\r\n|\r|\n", text)
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines
 
 
 FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 FENCE_MARK = "\x00fence"       # left by sanitize() where a fenced block opened, at its indent: a block boundary, never text
 COMMENT_MARK = "\x00comment"   # same, where an HTML comment BLOCK (`<!--` at line start) opened
-MARKS = (FENCE_MARK, COMMENT_MARK)
 LIST_ITEM_RE = re.compile(r"^( *)([-*+]|\d{1,9}[.)])([ \t]+)\S")   # marker + whitespace + content (for content-column tracking)
 THEMATIC_RE = re.compile(r"^ {0,3}" + THEMATIC_BREAK)                 # `---`, `- - -`, `***`: a thematic break outranks a list item
-HTML_COMMENT_BLOCK_RE = re.compile(r"^ {0,3}<!--")                  # CommonMark HTML block type 2 starts here
+_HTML6 = ("address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|"
+          "fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|"
+          "menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul")
+HTML_BLOCK_RE = re.compile(   # CommonMark HTML block starts that CAN interrupt a paragraph (types 1-6); type 7 cannot
+    r"^ {0,3}(?:<(?:script|pre|style|textarea)(?:\s|>|$)|<!--|<\?|<![A-Za-z]|<!\[CDATA\[|</?(?:" + _HTML6 + r")(?:\s|/?>|$))",
+    re.IGNORECASE)
+HTML_MARK = "\x00html"         # left by sanitize() where an HTML block other than a comment (types 1, 3-7) opened
+MARKS = (FENCE_MARK, COMMENT_MARK, HTML_MARK)
+_HTML_TYPE1 = re.compile(r"^ {0,3}<(script|pre|style|textarea)(?:\s|>|$)", re.IGNORECASE)
+_HTML_TYPE7 = re.compile(   # a complete open or close tag alone on the line (cannot interrupt a paragraph)
+    r"^ {0,3}(?:<[A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?:\s*=\s*(?:[^\s\"'=<>`]+|'[^']*'|\"[^\"]*\"))?)*\s*/?>"
+    r"|</[A-Za-z][A-Za-z0-9-]*\s*>)\s*$")
+
+
+def html_block_start(rel: str, in_paragraph: bool) -> tuple[str, str | None] | None:
+    """(mark, end) when `rel` (a line with its container indent stripped) opens a CommonMark
+    HTML block: `end` is the substring that closes it (on this or a later line, that line
+    included), or None for a block that ends at the next blank line. Type 7 never starts
+    inside a paragraph."""
+    m = _HTML_TYPE1.match(rel)
+    if m:
+        return HTML_MARK, "</" + m.group(1).lower() + ">"
+    if re.match(r"^ {0,3}<!--", rel):
+        return COMMENT_MARK, "-->"
+    if re.match(r"^ {0,3}<\?", rel):
+        return HTML_MARK, "?>"
+    if re.match(r"^ {0,3}<!\[CDATA\[", rel):
+        return HTML_MARK, "]]>"
+    if re.match(r"^ {0,3}<![A-Za-z]", rel):
+        return HTML_MARK, ">"
+    if re.match(r"^ {0,3}</?(?:" + _HTML6 + r")(?:\s|/?>|$)", rel, re.IGNORECASE):
+        return HTML_MARK, None
+    if not in_paragraph and _HTML_TYPE7.match(rel):
+        return HTML_MARK, None
+    return None
 INNER_STRONG_RE = re.compile(r"(?<!\\)\*\*")                        # an unescaped ** inside a title: not ONE strong span
 unclosed: list[str] = []   # filled by sanitize: a fence or comment still open at end of file
 
@@ -219,7 +252,13 @@ def mask_code(ln: str, open_run: int) -> tuple[str, int]:
     so `<!--` on the next line inside that span is code, not a comment. `open_run` is
     the length of such a run carried over from the previous line (0 = none).
     """
-    runs = [(m.start(), m.end()) for m in BACKTICK_RUN_RE.finditer(ln)]
+    runs: list[tuple[int, int]] = []
+    for m in BACKTICK_RUN_RE.finditer(ln):
+        a, b = m.start(), m.end()
+        if (a - len(ln[:a].rstrip("\\"))) % 2 == 1:   # `\`` — the first backtick is a literal, not part of the run
+            a += 1
+        if a < b:
+            runs.append((a, b))
     out: list[str] = []
     i = k = 0
     if open_run:
@@ -274,8 +313,10 @@ def sanitize(lines: list[str]) -> list[str]:
     fence_char: str | None = None
     fence_len = 0
     fence_base = 0
-    in_comment = False
-    block_comment = False        # the open comment began a line: the whole closing line is HTML, not prose
+    in_comment = False           # an INLINE `<!-- …` (mid-paragraph) still open from a previous line
+    html_end: str | None = None  # inside an HTML block: the string that closes it, or None = closes at a blank line
+    in_html = False
+    in_paragraph = False         # the previous line was prose (a type-7 HTML block cannot start here)
     open_run = 0                 # length of an inline-code backtick run still open from the previous line
     containers: list[int] = []   # content columns of the open list items, innermost last
     unclosed.clear()
@@ -283,10 +324,21 @@ def sanitize(lines: list[str]) -> list[str]:
         ln = expand_lead(ln)
         if not ln.strip():
             open_run = 0             # a code span cannot cross a blank line (the paragraph ends)
+            in_paragraph = False
         if fence_char is not None:
             m = fence_match(ln, fence_base)
             if m and m.group(1)[0] == fence_char and len(m.group(1)) >= fence_len and m.group(2).strip() == "":
                 fence_char = None
+            out.append("")
+            continue
+        if in_html:
+            # Types 1-5 end WITH the line holding their terminator; types 6-7 end at a blank
+            # line, which is itself not part of the block.
+            if html_end is None:
+                if not ln.strip():
+                    in_html = False
+            elif html_end in ln:
+                in_html = False
             out.append("")
             continue
         if in_comment:
@@ -295,10 +347,6 @@ def sanitize(lines: list[str]) -> list[str]:
                 out.append("")
                 continue
             in_comment = False
-            if block_comment:
-                block_comment = False
-                out.append("")       # HTML block type 2 ends WITH the line holding `-->`
-                continue
             ln = ln[j + 3:]          # the rest of the line is prose again
         # Track which list items are still open: a non-blank line shallower than an
         # item's content column closes that item (and everything nested in it).
@@ -310,12 +358,22 @@ def sanitize(lines: list[str]) -> list[str]:
             if li and not THEMATIC_RE.match(ln):
                 containers.append(content_col(li))
         base = containers[-1] if containers else 0
-        # An HTML comment block (`<!--` first on the line, relative to the open item) is a
-        # block like a fence: it leaves a boundary mark and its lines are not prose.
-        if len(ln) - len(ln.lstrip(" ")) >= base and HTML_COMMENT_BLOCK_RE.match(ln[base:]):
-            out.append(" " * (len(ln) - len(ln.lstrip(" "))) + COMMENT_MARK)
-            if "-->" not in ln[ln.find("<!--") + 4:]:
-                in_comment = block_comment = True
+        # An HTML block (`<!--`, `<pre>`, `<div>`, … first on the line, relative to the open
+        # item) is a block like a fence: it leaves a boundary mark and its lines are raw HTML,
+        # never Markdown — a `## date` or `- Do:` inside it is not a heading or a field.
+        hb = html_block_start(ln[base:], in_paragraph) if len(ln) - len(ln.lstrip(" ")) >= base else None
+        if hb:
+            mark, html_end = hb
+            out.append(" " * (len(ln) - len(ln.lstrip(" "))) + mark)
+            open_run = 0
+            in_paragraph = False
+            rel = ln[base:].lstrip(" ")
+            if html_end is None:
+                in_html = True                       # until a blank line
+            elif html_end == ">":
+                in_html = ">" not in rel[2:]         # `<!X … >` may close on its own line
+            else:
+                in_html = html_end not in rel[len(html_end) - 1:]   # e.g. `<!-- x -->` closes on its own line
             continue
         m = fence_match(ln, base)
         # CommonMark: a backtick fence cannot open when its info string contains a
@@ -323,6 +381,7 @@ def sanitize(lines: list[str]) -> list[str]:
         if m and not (m.group(1)[0] == "`" and "`" in m.group(2)):
             fence_char, fence_len, fence_base = m.group(1)[0], len(m.group(1)), base
             open_run = 0
+            in_paragraph = False
             out.append(" " * (len(ln) - len(ln.lstrip(" "))) + FENCE_MARK)
             continue
         # Inline code spans are opaque: a <!-- inside `…` is code, not a comment opener.
@@ -354,11 +413,14 @@ def sanitize(lines: list[str]) -> list[str]:
         # they must not read as a hard break once the comment is gone. Spaces AFTER `-->` stay.
         if comment_here and (in_comment or scan.endswith("-->")):
             prose = prose.rstrip()
+        in_paragraph = bool(prose.strip()) and not H2_RE.match(prose) and not THEMATIC_RE.match(prose)
         out.append(prose)
     if fence_char is not None:
         unclosed.append(f"fenced code block opened with {fence_char * fence_len} never closes")
-    if in_comment:
+    if in_comment or (in_html and html_end == "-->"):
         unclosed.append("HTML comment never closes")
+    elif in_html and html_end is not None:
+        unclosed.append(f"HTML block never closes (no {html_end!r})")
     return out
 
 
@@ -443,6 +505,7 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
             # open or close); `- **a** b **c**` is two strong spans, not one title; 5+ columns
             # after the marker make the title an indented code block, not bold.
             if (m and li and m.group(2).strip() and not m.group(2)[0].isspace() and not m.group(2)[-1].isspace()
+                    and (len(m.group(2)) - len(m.group(2).rstrip("\\"))) % 2 == 0   # `\**` escapes the first closing star
                     and not INNER_STRONG_RE.search(CODE_SPAN_RE.sub(lambda c: "x" * len(c.group(0)), m.group(2)))   # `**` in code is opaque
                     and gap_cols(indent + 1, m.group(1)) <= 4):
                 lesson = new_lesson(m.group(2), malformed=False)
