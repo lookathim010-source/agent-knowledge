@@ -1,0 +1,182 @@
+[
+ {
+  "id": "label-999",
+  "markdown": "[aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]: https://x.y\n\n[x][aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]\n",
+  "why": "labels up to 999 characters define a reference"
+ },
+ {
+  "id": "label-1000",
+  "markdown": "[aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]: https://x.y\n\n# H1\n",
+  "why": "a 1000-character label is prose (patched in knowledge_md.py)"
+ },
+ {
+  "id": "angle-inside-destination",
+  "markdown": "[T](https://x.y/<bad>) confidence 80%\n",
+  "why": "< inside a bare destination is allowed"
+ },
+ {
+  "id": "pointy-unclosed",
+  "markdown": "[T](<https://x.y) confidence 80%\n",
+  "why": "an unclosed <destination is not a link"
+ },
+ {
+  "id": "escaped-gt-in-pointy",
+  "markdown": "[docs]: <https://example.com/a\\>b>\n\n[docs]\n",
+  "why": "escaped > inside <…> does not close it"
+ },
+ {
+  "id": "unbalanced-paren-def",
+  "markdown": "[docs]: https://example.com/(oops\n\n# H1\n",
+  "why": "unbalanced ( makes a definition prose"
+ },
+ {
+  "id": "def-title-then-quote",
+  "markdown": "[docs]: https://example.com \"first\"\n\"visible second title\"\n\n# H1\n",
+  "why": "a second quoted line is a paragraph"
+ },
+ {
+  "id": "def-two-line-title",
+  "markdown": "[docs]: https://example.com\n  \"the title\"\n\n[docs]\n",
+  "why": "a title on the next line belongs to the definition"
+ },
+ {
+  "id": "ordered-col0-after-list",
+  "markdown": "- a\n  - b\n2. c\n",
+  "why": "2. at column 0 after a list opens a new list"
+ },
+ {
+  "id": "ordered-inside-field",
+  "markdown": "- a\n  - b\n    2. c\n",
+  "why": "2. inside the item's paragraph is lazy text"
+ },
+ {
+  "id": "ordered-under-paragraph",
+  "markdown": "a\n2. b\n",
+  "why": "2. cannot interrupt a direct paragraph"
+ },
+ {
+  "id": "nbsp-after-heading",
+  "markdown": "## 2026-08-24 \n",
+  "why": "a NBSP is heading content"
+ },
+ {
+  "id": "nbsp-marker",
+  "markdown": "- x\n",
+  "why": "a NBSP after a marker is not a list item"
+ },
+ {
+  "id": "nbsp-only-line",
+  "markdown": "foo\n \nbar\n",
+  "why": "a NBSP-only line is not blank"
+ },
+ {
+  "id": "comment-tail",
+  "markdown": "<!-- hidden -->VISIBLE\n\n# H1\n",
+  "why": "text after a comment block's closer is emitted"
+ },
+ {
+  "id": "lowercase-decl",
+  "markdown": "<!foo> bar\n",
+  "why": "lowercase <!foo> does not start an HTML block"
+ },
+ {
+  "id": "uppercase-decl",
+  "markdown": "<!FOO>\n",
+  "why": "uppercase <!FOO> is a declaration block"
+ },
+ {
+  "id": "hgroup-under-title",
+  "markdown": "- **T**\n  <hgroup>\n  - Why it matters here: x\n",
+  "why": "hgroup is not a type-6 tag"
+ },
+ {
+  "id": "type7-first-in-item",
+  "markdown": "- **T**\n  - <sub>\n    - Why it matters here: x\n    - Do: y\n\n  - Source: z\n",
+  "why": "a complete tag as an item's first content opens a block"
+ },
+ {
+  "id": "quoted-fence",
+  "markdown": "- **T**\n  - Why it matters here: x\n\n  > ```\n  > <!-- alpha -->\n  > ```\n",
+  "why": "a fence inside a block quote"
+ },
+ {
+  "id": "fence-indent-3",
+  "markdown": "- a\n     ```\n        code\n     ```\n",
+  "why": "content keeps indentation beyond the opener's"
+ },
+ {
+  "id": "escaped-comment-opener",
+  "markdown": "x \\<!-- visible -->\n",
+  "why": "an escaped < is literal"
+ },
+ {
+  "id": "even-backslash-backtick",
+  "markdown": "- **a \\\\`**` b**\n",
+  "why": "\\\\ then ` opens a code span"
+ },
+ {
+  "id": "inner-strong-even-backslash",
+  "markdown": "- **alpha\\\\**beta**\n",
+  "why": "\\\\ leaves the inner ** live"
+ },
+ {
+  "id": "setext-in-quote",
+  "markdown": "> Foo\n> ---\n",
+  "why": "a Setext H2 inside a block quote"
+ },
+ {
+  "id": "h2-in-quote",
+  "markdown": "> ## Unexpected\n",
+  "why": "an ATX H2 inside a block quote"
+ },
+ {
+  "id": "cross-line-code-span",
+  "markdown": "- x `a  x\n  b` tail\n",
+  "why": "spaces inside a multi-line code span are kept"
+ },
+ {
+  "id": "empty-h1",
+  "markdown": "# ##\n",
+  "why": "a closing sequence alone leaves an empty H1"
+ },
+ {
+  "id": "escaped-hash-h1",
+  "markdown": "# \\#\n",
+  "why": "an escaped # is H1 text"
+ },
+ {
+  "id": "confidence-attr",
+  "markdown": "x <br title=\"confidence 80%\"> y\n",
+  "why": "attribute text is raw HTML, not prose"
+ },
+ {
+  "id": "nested-fence-no-closer",
+  "markdown": "- a\n  - b\n    ```\n    code\n  - c\n",
+  "why": "a fence ends with its list item"
+ },
+ {
+  "id": "unclosed-comment-in-item",
+  "markdown": "- a\n  - b\n    <!-- open\n  - c\n",
+  "why": "a comment block ends with its list item"
+ },
+ {
+  "id": "upper-pre-blank",
+  "markdown": "<PRE>\nraw\n\nstill raw\n</PRE>\nafter\n",
+  "why": "<PRE> is type 1 (case-insensitive) and survives a blank line"
+ },
+ {
+  "id": "nbsp-after-tag",
+  "markdown": "<div class=x>\ntext\n",
+  "why": "a NBSP after a tag name does not make an HTML block"
+ },
+ {
+  "id": "type7-nbsp",
+  "markdown": "<span a=b>\n",
+  "why": "a NBSP before an attribute does not make a complete tag"
+ },
+ {
+  "id": "lowercase-decl-after-field",
+  "markdown": "- **T**\n  - Do: y\n<!foo> extra\n",
+  "why": "a lowercase declaration interrupts and closes the list"
+ }
+]

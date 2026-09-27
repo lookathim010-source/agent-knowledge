@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+"""check.py — differential conformance gate: the harness's Markdown parser (knowledge_md.MD)
+must render every CommonMark 0.31.2 spec example and every case in cases.json exactly like the
+reference implementation (commonmark.js 0.31.2). Output follows the harness contract.
+
+Usage: python3 harness/conformance/check.py ref.json   (ref.json from reference.cjs)
+"""
+import json
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+from knowledge_md import MD  # noqa: E402
+
+import re  # noqa: E402
+
+# Renderer whitespace that no browser shows: the two libraries place a newline differently
+# right before some block-level tags (`<li>b<pre>` vs `<li>b\n<pre>`, an empty
+# `<blockquote>\n</blockquote>`). Both sides are compared with exactly that newline removed;
+# every other byte must match.
+BLOCK_NL = re.compile(r"\n(?=</?(?:blockquote|pre|ul|ol|li|p|h[1-6]|hr|div|table)[\s/>])|\n(?=<!--)")
+# Reviewed cases where the REFERENCE departs from the spec text; we follow the spec. Each must
+# still diverge (a stale entry fails the gate), so the list cannot silently outlive its reason.
+ALLOWED = {
+    "nbsp-after-tag": "commonmark.js matches HTML-block starts with JS `\\s`, which includes U+00A0; spec 0.31.2 "
+                      "section 4.6 allows only space, tab, end of line, `>` or `/>` after the tag name. cmark and "
+                      "cmark-gfm (GitHub) follow the spec: paragraph.",
+    "type7-nbsp": "same root cause: an attribute must be preceded by space, tab or a line ending (spec 6.6); "
+                  "cmark and cmark-gfm render a paragraph.",
+}
+
+
+def canon(html: str) -> str:
+    return BLOCK_NL.sub("", html)
+
+ref = json.load(open(sys.argv[1], encoding="utf-8"))
+bad, allowed_hit = [], []
+for group in ("spec", "cases"):
+    for ex in ref[group]:
+        if canon(MD.render(ex["markdown"])) != canon(ex["html"]):
+            (allowed_hit if ex["id"] in ALLOWED else bad).append(ex["id"])
+n_spec, n_cases = len(ref["spec"]), len(ref["cases"])
+def differing(group_is_spec: bool) -> int:
+    return sum(1 for x in bad + allowed_hit if x.startswith("spec#") == group_is_spec)
+
+
+print(f"{'PASS' if not bad else 'FAIL'} conformance:spec+cases   {n_spec - differing(True)}/{n_spec} spec examples identical, "
+      f"{n_cases - differing(False)}/{n_cases} edge cases identical, {len(allowed_hit)} reviewed exception(s) {sorted(allowed_hit)}")
+for b in bad:
+    ex = next(e for g in ("spec", "cases") for e in ref[g] if e["id"] == b)
+    print(f"  DIVERGES {b}: {ex.get('why', ex.get('section'))}\n    input {ex['markdown']!r}\n    ref   {ex['html']!r}\n    ours  {MD.render(ex['markdown'])!r}")
+stale = sorted(set(ALLOWED) - set(allowed_hit))
+for a in sorted(allowed_hit):
+    print(f"  allowed {a}: {ALLOWED[a]}")
+if stale:
+    print(f"FAIL conformance:allowlist      allowed divergence(s) no longer diverge — remove them: {stale}")
+print("----")
+ok = not bad and not stale
+print(f"RESULT: {'PASS' if ok else 'FAIL'} — {len(bad)} unexpected divergence(s)")
+sys.exit(0 if ok else 1)
