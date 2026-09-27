@@ -56,6 +56,7 @@ INTERRUPT_RE = re.compile(r"^ {0,3}(?:#{1,6}(?:\s|$)|>|" + THEMATIC_BREAK + ")")
 LINK_LABEL = r"\[(?:\\.|[^\]\\])+\]"                                          # allows escaped \] inside the label
 LINK_OPEN_RE = re.compile(r"^" + LINK_LABEL + r"\(")                       # `[label](` — the destination is scanned by hand
 CONFIDENCE_RE = re.compile(r"confidence (\d{1,3})%")
+ASCII_PUNCT = set(r"""!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~""")   # a backslash escapes exactly these (CommonMark)
 
 
 def parse_source(text: str) -> tuple[str, int] | None:
@@ -73,6 +74,9 @@ def parse_source(text: str) -> tuple[str, int] | None:
         c = text[i]
         if c.isspace():
             return None
+        if c == "\\" and i + 1 < len(text) and text[i + 1] in ASCII_PUNCT:
+            i += 2                                   # `\(` is destination text, not a delimiter
+            continue
         if c == "(":
             depth += 1
         elif c == ")":
@@ -153,9 +157,10 @@ def regular_file(p: pathlib.Path) -> bool:
 
 
 def read_lines(p: pathlib.Path) -> list[str] | None:
-    """Lines of a UTF-8 text file, or None (with a FAIL recorded) when it is not valid UTF-8."""
+    """Lines of a UTF-8 text file (a leading BOM is encoding metadata, not content, and is
+    dropped), or None (with a FAIL recorded) when it is not valid UTF-8."""
     try:
-        return p.read_text(encoding="utf-8").splitlines()
+        return p.read_text(encoding="utf-8-sig").splitlines()
     except UnicodeDecodeError as exc:
         fail(f"utf8:{p.name}", f"not valid UTF-8 at byte {exc.start}: {exc.reason}")
         return None
@@ -325,6 +330,7 @@ def sanitize(lines: list[str]) -> list[str]:
         scan, open_run = mask_code(ln, open_run)
         buf: list[str] = []
         i = 0
+        comment_here = False
         while i < len(scan):
             if in_comment:
                 j = scan.find("-->", i)
@@ -340,9 +346,15 @@ def sanitize(lines: list[str]) -> list[str]:
                     i = len(scan)
                 else:
                     buf.append(ln[i:j])
-                    in_comment = True
+                    in_comment = comment_here = True
                     i = j + 4
-        out.append("".join(buf))
+        prose = "".join(buf)
+        # Spaces that sat before a comment which ran to the end of the line (`text  <!-- c -->`
+        # or a comment that continues onto the next line) were never line-ending spaces, so
+        # they must not read as a hard break once the comment is gone. Spaces AFTER `-->` stay.
+        if comment_here and (in_comment or scan.endswith("-->")):
+            prose = prose.rstrip()
+        out.append(prose)
     if fence_char is not None:
         unclosed.append(f"fenced code block opened with {fence_char * fence_len} never closes")
     if in_comment:
@@ -427,9 +439,10 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
                 continue
             m = LESSON_RE.match(ln)
             li = LIST_ITEM_RE.match(ln)
-            # `- ** **` is not bold; `- **a** b **c**` is two strong spans, not one title;
-            # 5+ columns after the marker make the title an indented code block, not bold.
-            if (m and li and m.group(2).strip()
+            # `- ** **` / `- ** x**` / `- **x **` are not bold (a `**` next to whitespace cannot
+            # open or close); `- **a** b **c**` is two strong spans, not one title; 5+ columns
+            # after the marker make the title an indented code block, not bold.
+            if (m and li and m.group(2).strip() and not m.group(2)[0].isspace() and not m.group(2)[-1].isspace()
                     and not INNER_STRONG_RE.search(CODE_SPAN_RE.sub(lambda c: "x" * len(c.group(0)), m.group(2)))   # `**` in code is opaque
                     and gap_cols(indent + 1, m.group(1)) <= 4):
                 lesson = new_lesson(m.group(2), malformed=False)
