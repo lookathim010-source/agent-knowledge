@@ -1,14 +1,12 @@
-# Verified: Claude surfaces — Code tab cloud sessions vs chat/Cowork (2026-09-26)
+# Verified: Claude surfaces — cloud sessions from the chat/Cowork tab vs the Code tab (2026-09-26, corrected 2026-09-27)
 
-> **Superseded by [v2](2026-09-26_claude-surfaces_v2.md) (2026-09-27).** The "Code tab" label on this session is wrong — it was opened from the chat/Cowork tab. Kept for the audit trail; read v2.
-
-Source: live tool runs in cloud session <https://claude.ai/code/session_01T7N2VsxDrRZPwWM7zdFnuK> plus the current Claude Code docs (claude-code-on-the-web, routines, claude-projects, remote-control) and the Cowork scheduled-tasks help article. Not a daily.dev lesson — a session-verified fact sheet.
+Source: live tool runs in cloud session <https://claude.ai/code/session_01T7N2VsxDrRZPwWM7zdFnuK> — opened from the **chat/Cowork tab**, not the Code tab (T's correction, 2026-09-27; v1 of this sheet mislabelled it) — plus the current Claude Code docs (claude-code-on-the-web, routines, claude-projects, remote-control) and the Cowork scheduled-tasks help article. Not a daily.dev lesson — a session-verified fact sheet.
 
 ## Core finding
 
-"Chat/Cowork is file-out, Code tab is repo-in/repo-out" is false. It is one cloud harness (Claude Code Remote) with many front doors: claude.ai/code, mobile Code tab, desktop app "Cloud", `claude --cloud`, routines, Claude Tag. Pick the door by what the session must be handed at birth: GitHub push credential + PR tooling → cloud session; a folder on the PC → Cowork/desktop. Routines, connectors, sub-agents and artifacts travel with all of them.
+"Chat/Cowork is file-out, Code tab is repo-in/repo-out" is false. It is one cloud harness (Claude Code Remote) with many front doors: the chat/Cowork tab, claude.ai/code, mobile Code tab, desktop app "Cloud", `claude --cloud`, routines, Claude Tag. Pick the door by what the session must be handed at birth: GitHub push credential + PR tooling → cloud session; a folder on the PC → Cowork/desktop. Routines, connectors, sub-agents and artifacts travel with all of them.
 
-## Verified live (Code tab cloud session)
+## Verified live (cloud session opened from the chat/Cowork tab)
 
 - `add_repo(push)` → shallow clone → signed commit → `git push`: native. Credentials never enter the VM; Anthropic's GitHub proxy injects them.
 - PR creation via `POST api.github.com/repos/<o>/<r>/pulls` works with the injected credential but REQUIRES `Content-Type: application/json` (proxy returns HTTP 415 without it). `gh` CLI is not installed in the cloud VM.
@@ -16,8 +14,8 @@ Source: live tool runs in cloud session <https://claude.ai/code/session_01T7N2Vs
 - Scheduled tasks: create / list / delete from a cloud session work. Run-once tasks don't count against the daily routine cap. `send_later` re-arms same-session check-ins.
 - Parallel sub-agents run concurrently (two agents, overlapping timestamps).
 - A cloud session reaches the linked PC through the device bridge (get_device_info → win32 "my-damn-pc", desktop app 2.9939.2; local MCP servers Filesystem, memory, local-kb-search, sequential-thinking, Windows-MCP).
-- The Cowork-created scheduled task (2026-08-24) is listed from the Code tab → one routine store.
-- The Cowork session of 2026-08-24 committed to GitHub (this repo, cfd032a; daily-dev-connector with CI) via a pushbot workaround. Native push from the chat side: UNVERIFIED (~35%).
+- The Cowork-created scheduled task (2026-08-24) is listed from this session → one routine store.
+- Native push from the chat side: VERIFIED — every push, PR and scheduled-task call in this sheet came from a session opened in the chat/Cowork tab (tab per T's statement; the git/PR/task results are tool-verified). The Cowork session of 2026-08-24 had used a pushbot workaround (this repo, cfd032a; daily-dev-connector with CI); the workaround is not required.
 
 ## From the docs (fetched 2026-09-26)
 
@@ -35,6 +33,10 @@ Source: live tool runs in cloud session <https://claude.ai/code/session_01T7N2Vs
 ## Bots seen on the repos
 
 GitGuardian Security Checks · Kilo Code Review (glm-5.3) · Sourcery (no access on private repos; upsell comment only).
+
+## Correction trail
+
+- v1 (commit `ef0c3ac`) labelled the session "Code tab" because T tapped **Code** on the where-does-this-chat-live tile by accident. He corrected it on 2026-09-27; v1 is kept with a superseded banner, this v2 carries the fix. The core finding is unchanged and now stronger: the chat/Cowork-tab session did everything natively.
 
 ## Proof artifact
 
