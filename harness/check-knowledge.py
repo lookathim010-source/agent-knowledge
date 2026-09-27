@@ -40,11 +40,17 @@ KNOWLEDGE_H1 = "# daily-dev-agentic knowledge — T agent"   # the connector dep
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SECTION_RE = re.compile(r"^ {0,3}## (\d{4}-\d{2}-\d{2})\s*$")
 LESSON_RE = re.compile(r"^ {0,3}-([ \t]+)\*\*(.+?)\*\*\s*$")     # bold lesson bullet: `-`, 1-4 columns of whitespace (checked after), **title**
-TOP_BULLET_RE = re.compile(r"^ {0,3}(?:[-*+]|\d+[.)])(?:[ \t]+\S|\s*$)")   # any top-level list item incl. an EMPTY one, any marker, space or tab after it
+TOP_BULLET_RE = re.compile(r"^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:[ \t]+\S|\s*$)")   # any top-level list item incl. an EMPTY one; ordered markers are 1-9 digits (CommonMark)
 FIELD_LABEL_RE = re.compile(r"^\s*-[ \t](Why it matters here|Do|Source):(.*)$")   # label first, value validated after (nesting checked by indent)
 # Blocks that interrupt a paragraph (CommonMark): an ATX heading, a block quote, a thematic break.
 # A line like this at top level is never lazy continuation of the lesson above it.
 THEMATIC_BREAK = r"(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$"   # 3+ of the SAME character (`- * -` is not a break)
+_HTML6 = ("address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|"
+          "fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|"
+          "menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul")
+HTML_BLOCK_RE = re.compile(   # CommonMark HTML block starts that CAN interrupt a paragraph (types 1-6); type 7 cannot
+    r"^ {0,3}(?:<(?:script|pre|style|textarea)(?:\s|>|$)|<!--|<\?|<![A-Za-z]|<!\[CDATA\[|</?(?:" + _HTML6 + r")(?:\s|/?>|$))",
+    re.IGNORECASE)
 INTERRUPT_RE = re.compile(r"^ {0,3}(?:#{1,6}(?:\s|$)|>|" + THEMATIC_BREAK + ")")
 LINK_LABEL = r"\[(?:\\.|[^\]\\])+\]"                                          # allows escaped \] inside the label
 SOURCE_VALUE_RE = re.compile(r"^ " + LINK_LABEL + r"\(https?://[^)\s]+\).*confidence (\d{1,3})%")
@@ -84,6 +90,17 @@ def valid_date(s: str) -> bool:
 
 def norm(s: str) -> str:
     return " ".join(s.split())
+
+
+HARD_BREAK = "⏎"   # joins two lines of a field when the first ends in a hard line break (2+ spaces or an odd backslash)
+
+
+def ends_hard(ln: str) -> bool:
+    """True when a following line would render after a hard line break, not a soft one."""
+    if ln.endswith("  "):
+        return True
+    body = ln.rstrip(" ")
+    return (len(body) - len(body.rstrip("\\"))) % 2 == 1
 
 
 def regular_file(p: pathlib.Path) -> bool:
@@ -278,24 +295,36 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
     lines = sanitize(lines)
 
     def new_lesson(title: str, malformed: bool) -> dict:
-        return {"title": norm(title), "why": "", "do": "", "source": "", "col": 2, "last": None,
+        return {"title": norm(title), "why": "", "do": "", "source": "", "col": 2, "last": None, "hard": False,
                 "seen": {"why": False, "do": False, "source": False},
                 "problems": (["not-a-bold-lesson-bullet"] if malformed else [])}
 
-    def absorb(lesson: dict, text: str) -> None:
-        """Continuation text belongs to the field above it — or to the title when no field has started."""
+    def absorb(lesson: dict, ln: str) -> None:
+        """Continuation text belongs to the field above it — or to the title when no field
+        has started. A hard line break on the previous line is kept as HARD_BREAK so two
+        copies that render differently never compare equal."""
+        text = ln.strip()
+        sep = f" {HARD_BREAK} " if lesson["hard"] else " "
         if lesson["last"] is not None:
             key = lesson["last"]
             if key == "source":
-                lesson["source"] = norm(lesson["source"] + " " + text) if lesson["source"] else lesson["source"]
+                lesson["source"] = norm(lesson["source"] + sep + text) if lesson["source"] else lesson["source"]
             else:
-                lesson[key] = norm(lesson[key] + " " + text)
+                lesson[key] = norm(lesson[key] + sep + text)
         elif not any(lesson["seen"].values()):
-            lesson["title"] = norm(lesson["title"] + " " + text)
+            lesson["title"] = norm(lesson["title"] + sep + text)
+        lesson["hard"] = ends_hard(ln)
 
     prev_blank = True
     for ln in lines:
         was_prev_blank, prev_blank = prev_blank, not ln.strip()
+        indent = len(ln) - len(ln.lstrip(" "))
+        # CommonMark: a line indented at or past the open lesson's content column is INSIDE
+        # that list item — even `  ## 2026-08-23` — so it can never open a day section.
+        if lesson is not None and current is not None and indent >= lesson["col"] and H2_RE.match(ln):
+            lesson["problems"].append(f"heading {ln.strip()[:30]!r} nested inside the lesson (indent {indent})")
+            lesson["last"] = None
+            continue
         m = SECTION_RE.match(ln)
         if m:
             current = m.group(1)
@@ -314,7 +343,6 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
             if TOP_BULLET_RE.match(ln) and not THEMATIC_RE.match(ln):   # a bullet under no day heading: readers never see it as a lesson
                 misplaced.append(ln.strip()[:60])
             continue
-        indent = len(ln) - len(ln.lstrip(" "))
         # CommonMark: a line indented at or past the current lesson's content column
         # (marker + the whitespace after it, tabs expanded) belongs to that lesson;
         # anything shallower is a sibling or a block that closes the list.
@@ -327,27 +355,30 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
             li = LIST_ITEM_RE.match(ln)
             # `- ** **` is not bold; `- **a** b **c**` is two strong spans, not one title;
             # 5+ columns after the marker make the title an indented code block, not bold.
-            if (m and li and m.group(2).strip() and not INNER_STRONG_RE.search(m.group(2))
+            if (m and li and m.group(2).strip()
+                    and not INNER_STRONG_RE.search(CODE_SPAN_RE.sub(lambda c: "x" * len(c.group(0)), m.group(2)))   # `**` in code is opaque
                     and gap_cols(indent + 1, m.group(1)) <= 4):
                 lesson = new_lesson(m.group(2), malformed=False)
                 lesson["col"] = content_col(li)
+                lesson["hard"] = ends_hard(ln)
                 sections[current].append(lesson)
                 continue
             if TOP_BULLET_RE.match(ln):
                 parts = ln.strip().split(None, 1)
                 lesson = new_lesson("MALFORMED: " + (parts[1].strip() if len(parts) > 1 else "(empty list item)"), malformed=True)
                 lesson["col"] = content_col(li) if li else indent + 2
+                lesson["hard"] = ends_hard(ln)
                 sections[current].append(lesson)
                 continue
             if lesson is not None and ln.strip():
-                if not was_prev_blank and not INTERRUPT_RE.match(ln) and not is_mark(ln):
+                if not was_prev_blank and not INTERRUPT_RE.match(ln) and not HTML_BLOCK_RE.match(ln) and not is_mark(ln):
                     # Lazy continuation (CommonMark): a non-blank, non-list line directly
                     # under a paragraph — even at indent 0 — is still that paragraph's text.
-                    absorb(lesson, ln.strip())
+                    absorb(lesson, ln)
                 else:
-                    # A heading, thematic break, block quote, fenced code block, HTML comment
-                    # block, or a paragraph after a blank line closes the list: fields that
-                    # follow render as a NEW list, not as this lesson's, so they must not reconnect.
+                    # A heading, thematic break, block quote, fenced code block, HTML block
+                    # (`<div>`, `<!--`, …), or a paragraph after a blank line closes the list:
+                    # fields that follow render as a NEW list, not this lesson's, so they must not reconnect.
                     lesson = None
             continue
         # Nested line. A child list marker is valid only at indent col .. col+3
@@ -362,13 +393,13 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
             continue
         if not m:
             # continuation text (indented) belongs to the field above it — or to the title
-            text = ln.strip()
-            if text:
-                absorb(lesson, text)
+            if ln.strip():
+                absorb(lesson, ln)
             continue
         label, value = m.group(1), m.group(2)
         key = {"Why it matters here": "why", "Do": "do", "Source": "source"}[label]
         lesson["last"] = key
+        lesson["hard"] = ends_hard(ln)
         if lesson["seen"][key]:
             lesson["problems"].append(f"duplicate {key}")
         lesson["seen"][key] = True
