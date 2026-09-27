@@ -46,7 +46,9 @@ FIELD_LABEL_RE = re.compile(r"^\s*-[ \t](Why it matters here|Do|Source):(.*)$") 
 # Blocks that interrupt a paragraph (CommonMark): an ATX heading, a block quote, a thematic break.
 # A line like this at top level is never lazy continuation of the lesson above it.
 THEMATIC_BREAK = r"(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$"   # 3+ of the SAME character (`- * -` is not a break)
-INTERRUPT_RE = re.compile(r"^ {0,3}(?:#{1,6}(?:\s|$)|>|" + THEMATIC_BREAK + ")")
+INTERRUPT_RE = re.compile(r"^ {0,3}(?:#{1,6}(?:[ \t]|$)|>|" + THEMATIC_BREAK + ")")
+ATX_RE = re.compile(r"^ {0,3}#{1,6}(?:[ \t]|$)")                                   # any ATX heading
+LINK_REF_DEF_RE = re.compile(r"^ {0,3}\[(?:\\.|[^\]\\])+\]:[ \t]*\S")          # `[label]: dest …` renders nothing
 LINK_LABEL = r"\[(?:\\.|[^\]\\])+\]"                                          # allows escaped \] inside the label
 LINK_OPEN_RE = re.compile(r"^" + LINK_LABEL + r"\(")                       # `[label](` — the destination is scanned by hand
 CONFIDENCE_RE = re.compile(r"confidence (\d{1,3})%")
@@ -60,10 +62,24 @@ def parse_source(text: str) -> tuple[str, int] | None:
     balance — `https://x.y/(broken)` never closes, so it is not a link at all.
     """
     text = text.strip()
-    m = LINK_OPEN_RE.match(text)
-    if not m:
+    if not text.startswith("["):
         return None
-    i, depth = m.end(), 0
+    j, bdepth = 1, 0                                 # the label: balanced, unescaped brackets are allowed inside
+    while j < len(text):
+        c = text[j]
+        if c == "\\" and j + 1 < len(text) and text[j + 1] in ASCII_PUNCT:
+            j += 2
+            continue
+        if c == "[":
+            bdepth += 1
+        elif c == "]":
+            if bdepth == 0:
+                break
+            bdepth -= 1
+        j += 1
+    if j >= len(text) or j == 1 or j + 1 >= len(text) or text[j + 1] != "(":
+        return None
+    i, depth = j + 2, 0
     while i < len(text):
         c = text[i]
         if c.isspace() or c in "<>":
@@ -80,7 +96,7 @@ def parse_source(text: str) -> tuple[str, int] | None:
         i += 1
     else:
         return None                              # ran off the end without closing the destination
-    dest = text[m.end():i]
+    dest = text[j + 2:i]
     if not re.match(r"https?://\S+$", dest):
         return None
     cm = CONFIDENCE_RE.search(text[i + 1:])
@@ -89,7 +105,7 @@ DAY_H1_RE = re.compile(r"^# Lessons — (\d{4}-\d{2}-\d{2})\s*$")
 VERIFIED_NAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_[a-z0-9-]+_v\d+\.md$")
 H1_LINE_RE = re.compile(r"^ {0,3}#[ \t]+\S")   # a real ATX H1 with text: ≤3 leading spaces (4 = code), space or tab after `#`
 FIELDS = ("why", "do", "source")
-H2_RE = re.compile(r"^ {0,3}##(?:\s|$)")   # any ATX H2 (≤3-space indent), including a bare `##`
+H2_RE = re.compile(r"^ {0,3}##(?:[ \t]|$)")   # any ATX H2 (≤3-space indent), including a bare `##`; NBSP is not a separator
 bad_headings: list[str] = []   # filled by parse_lessons: H2s that are not valid day headings
 misplaced: list[str] = []      # filled by parse_lessons: top-level bullets that sit under no `## YYYY-MM-DD`
 
@@ -169,6 +185,7 @@ def read_lines(p: pathlib.Path) -> list[str] | None:
 FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 FENCE_MARK = "\x00fence"       # left by sanitize() where a fenced block opened, at its indent: a block boundary, never text
 COMMENT_MARK = "\x00comment"   # same, where an HTML comment BLOCK (`<!--` at line start) opened
+CONT_MARK = "\x00cont"         # prefix: this line is paragraph continuation text (it began inside an inline comment)
 LIST_ITEM_RE = re.compile(r"^( *)([-*+]|\d{1,9}[.)])([ \t]+)\S")   # marker + whitespace + content (for content-column tracking)
 THEMATIC_RE = re.compile(r"^ {0,3}" + THEMATIC_BREAK)                 # `---`, `- - -`, `***`: a thematic break outranks a list item
 _HTML6 = ("address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|"
@@ -199,7 +216,7 @@ def html_block_start(rel: str, in_paragraph: bool) -> tuple[str, str | None] | N
         return HTML_MARK, "?>"
     if re.match(r"^ {0,3}<!\[CDATA\[", rel):
         return HTML_MARK, "]]>"
-    if re.match(r"^ {0,3}<![A-Za-z]", rel):
+    if re.match(r"^ {0,3}<![A-Z]", rel):         # uppercase only (CommonMark type 4); `<!foo>` is text
         return HTML_MARK, ">"
     if re.match(r"^ {0,3}</?(?:" + _HTML6 + r")(?:\s|/?>|$)", rel, re.IGNORECASE):
         return HTML_MARK, None
@@ -230,6 +247,13 @@ def gap_cols(start: int, ws: str) -> int:
     for ch in ws:
         end = end + 1 if ch == " " else end + 4 - end % 4
     return end - start
+
+
+def can_interrupt(li: re.Match) -> bool:
+    """CommonMark: a list item may interrupt a paragraph only if it is non-empty and, when
+    ordered, starts at 1 (`2. more` under a paragraph is lazy continuation text)."""
+    marker = li.group(2)
+    return not marker[0].isdigit() or int(marker[:-1]) == 1
 
 
 def content_col(li: re.Match) -> int:
@@ -292,6 +316,42 @@ def fence_match(ln: str, base: int) -> re.Match | None:
     return FENCE_RE.match(ln[base:])
 
 
+def strip_inline_comments(ln: str, scan: str) -> str:
+    """Remove `<!-- … -->` spans from one prose line (`scan` is `ln` with code masked), carrying
+    an unterminated comment into the module-level `in_comment` flag via the caller."""
+    global _in_comment
+    buf: list[str] = []
+    i = 0
+    comment_here = False
+    while i < len(scan):
+        if _in_comment:
+            j = scan.find("-->", i)
+            if j < 0:
+                i = len(scan)
+            else:
+                _in_comment = False
+                i = j + 3
+        else:
+            j = scan.find("<!--", i)
+            if j < 0:
+                buf.append(ln[i:])
+                i = len(scan)
+            else:
+                buf.append(ln[i:j])
+                _in_comment = comment_here = True
+                i = j + 4
+    prose = "".join(buf)
+    # Spaces that sat before a comment which ran to the end of the line (`text  <!-- c -->`
+    # or a comment that continues onto the next line) were never line-ending spaces, so
+    # they must not read as a hard break once the comment is gone. Spaces AFTER `-->` stay.
+    if comment_here and (_in_comment or scan.endswith("-->")):
+        prose = prose.rstrip()
+    return prose
+
+
+_in_comment = False   # an inline `<!-- …` still open at the end of the previous prose line (sanitize state)
+
+
 def sanitize(lines: list[str]) -> list[str]:
     """Return what a reader sees as prose: fenced code and HTML comments blanked.
 
@@ -313,7 +373,8 @@ def sanitize(lines: list[str]) -> list[str]:
     fence_char: str | None = None
     fence_len = 0
     fence_base = 0
-    in_comment = False           # an INLINE `<!-- …` (mid-paragraph) still open from a previous line
+    global _in_comment
+    _in_comment = False          # an INLINE `<!-- …` (mid-paragraph) still open from a previous line
     html_end: str | None = None  # inside an HTML block: the string that closes it, or None = closes at a blank line
     in_html = False
     in_paragraph = False         # the previous line was prose (a type-7 HTML block cannot start here)
@@ -337,27 +398,46 @@ def sanitize(lines: list[str]) -> list[str]:
             if html_end is None:
                 if not ln.strip():
                     in_html = False
-            elif html_end in ln:
+            elif html_end in ln.lower():         # `</PRE>` closes a `<pre>` block too
                 in_html = False
             out.append("")
             continue
-        if in_comment:
+        cont = False
+        if _in_comment:
             j = ln.find("-->")
             if j < 0:
                 out.append("")
                 continue
-            in_comment = False
-            ln = ln[j + 3:]          # the rest of the line is prose again
+            _in_comment = False
+            ln = ln[j + 3:]          # the rest of the line is prose again — but it did not BEGIN the
+            cont = True              # line, so it can never start a block: it stays in the paragraph
         # Track which list items are still open: a non-blank line shallower than an
         # item's content column closes that item (and everything nested in it).
-        if ln.strip():
-            indent = len(ln) - len(ln.lstrip(" "))
-            while containers and indent < containers[-1]:
-                containers.pop()
-            li = LIST_ITEM_RE.match(ln)
-            if li and not THEMATIC_RE.match(ln):
-                containers.append(content_col(li))
         base = containers[-1] if containers else 0
+        if ln.strip() and not cont:
+            indent = len(ln) - len(ln.lstrip(" "))
+            # A lazy continuation (paragraph text that is none of the block starts) stays inside
+            # the open list item however shallow it is, so it must not pop the containers.
+            li = LIST_ITEM_RE.match(ln)
+            # Judge "does this line start a block?" relative to the deepest container the
+            # line's indent still satisfies (a `<!--` at column 0 under a column-4 field is a
+            # top-level HTML block, not paragraph text).
+            eff = next((c for c in reversed(containers) if c <= indent), 0)
+            lazy = in_paragraph and not (
+                (li and not THEMATIC_RE.match(ln) and can_interrupt(li)) or THEMATIC_RE.match(ln)
+                or ATX_RE.match(ln) or ln.lstrip(" ").startswith(">")
+                or fence_match(ln, eff) or html_block_start(ln[eff:], True))
+            if not lazy:
+                while containers and indent < containers[-1]:
+                    containers.pop()
+                if li and not THEMATIC_RE.match(ln) and (not in_paragraph or can_interrupt(li)):
+                    containers.append(content_col(li))
+        base = containers[-1] if containers else 0
+        if cont:
+            scan, open_run = mask_code(ln, open_run)
+            out.append(CONT_MARK + strip_inline_comments(ln, scan))
+            in_paragraph = True
+            continue
         # An HTML block (`<!--`, `<pre>`, `<div>`, … first on the line, relative to the open
         # item) is a block like a fence: it leaves a boundary mark and its lines are raw HTML,
         # never Markdown — a `## date` or `- Do:` inside it is not a heading or a field.
@@ -373,7 +453,7 @@ def sanitize(lines: list[str]) -> list[str]:
             elif html_end == ">":
                 in_html = ">" not in rel[2:]         # `<!X … >` may close on its own line
             else:
-                in_html = html_end not in rel[len(html_end) - 1:]   # e.g. `<!-- x -->` closes on its own line
+                in_html = html_end not in rel.lower()[len(html_end) - 1:]   # e.g. `<!-- x -->` closes on its own line
             continue
         m = fence_match(ln, base)
         # CommonMark: a backtick fence cannot open when its info string contains a
@@ -387,37 +467,12 @@ def sanitize(lines: list[str]) -> list[str]:
         # Inline code spans are opaque: a <!-- inside `…` is code, not a comment opener.
         # Mask them (same length, harmless chars) for delimiter scanning; restore text after.
         scan, open_run = mask_code(ln, open_run)
-        buf: list[str] = []
-        i = 0
-        comment_here = False
-        while i < len(scan):
-            if in_comment:
-                j = scan.find("-->", i)
-                if j < 0:
-                    i = len(scan)
-                else:
-                    in_comment = False
-                    i = j + 3
-            else:
-                j = scan.find("<!--", i)
-                if j < 0:
-                    buf.append(ln[i:])
-                    i = len(scan)
-                else:
-                    buf.append(ln[i:j])
-                    in_comment = comment_here = True
-                    i = j + 4
-        prose = "".join(buf)
-        # Spaces that sat before a comment which ran to the end of the line (`text  <!-- c -->`
-        # or a comment that continues onto the next line) were never line-ending spaces, so
-        # they must not read as a hard break once the comment is gone. Spaces AFTER `-->` stay.
-        if comment_here and (in_comment or scan.endswith("-->")):
-            prose = prose.rstrip()
-        in_paragraph = bool(prose.strip()) and not H2_RE.match(prose) and not THEMATIC_RE.match(prose)
+        prose = strip_inline_comments(ln, scan)
+        in_paragraph = bool(prose.strip()) and not ATX_RE.match(prose) and not THEMATIC_RE.match(prose)
         out.append(prose)
     if fence_char is not None:
         unclosed.append(f"fenced code block opened with {fence_char * fence_len} never closes")
-    if in_comment or (in_html and html_end == "-->"):
+    if _in_comment or (in_html and html_end == "-->"):
         unclosed.append("HTML comment never closes")
     elif in_html and html_end is not None:
         unclosed.append(f"HTML block never closes (no {html_end!r})")
@@ -466,6 +521,10 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
     prev_blank = True
     for ln in lines:
         was_prev_blank, prev_blank = prev_blank, not ln.strip()
+        if ln.startswith(CONT_MARK):              # paragraph text that began inside an inline comment
+            if lesson is not None and current is not None and not was_prev_blank:
+                absorb(lesson, ln[len(CONT_MARK):])
+            continue
         indent = len(ln) - len(ln.lstrip(" "))
         # CommonMark: a line indented at or past the open lesson's content column is INSIDE
         # that list item — even `  ## 2026-08-23` — so it can never open a day section.
@@ -506,6 +565,8 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
             # after the marker make the title an indented code block, not bold.
             if (m and li and m.group(2).strip() and not m.group(2)[0].isspace() and not m.group(2)[-1].isspace()
                     and (len(m.group(2)) - len(m.group(2).rstrip("\\"))) % 2 == 0   # `\**` escapes the first closing star
+                    and m.group(2)[0] != "*"                                      # `***foo**` → `*` + strong
+                    and not (m.group(2).endswith("*") and (len(m.group(2)) - 1 - len(m.group(2)[:-1].rstrip("\\"))) % 2 == 0)   # `**foo***` → strong + `*`
                     and not INNER_STRONG_RE.search(CODE_SPAN_RE.sub(lambda c: "x" * len(c.group(0)), m.group(2)))   # `**` in code is opaque
                     and gap_cols(indent + 1, m.group(1)) <= 4):
                 lesson = new_lesson(m.group(2), malformed=False)
@@ -513,7 +574,11 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
                 lesson["hard"] = ends_hard(ln)
                 sections[current].append(lesson)
                 continue
-            if TOP_BULLET_RE.match(ln):
+            li_any = LIST_ITEM_RE.match(ln)
+            if TOP_BULLET_RE.match(ln) and not (lesson is not None and not was_prev_blank
+                                                and (li_any is None or not can_interrupt(li_any))):
+                # (a `2.` item or an empty item directly under a paragraph cannot start a list: it
+                # is lazy continuation text and is handled below)
                 parts = ln.strip().split(None, 1)
                 lesson = new_lesson("MALFORMED: " + (parts[1].strip() if len(parts) > 1 else "(empty list item)"), malformed=True)
                 lesson["col"] = content_col(li) if li else indent + 2
@@ -678,7 +743,7 @@ else:
             continue
         day_lines = sanitize(raw)
         problems: list[str] = list(unclosed)
-        first = next((ln for ln in day_lines if ln.strip() and not is_mark(ln)), "")   # comments and code are skipped, not counted
+        first = next((ln for ln in day_lines if ln.strip() and not is_mark(ln) and not LINK_REF_DEF_RE.match(ln)), "")   # comments, code, ref defs skipped
         hm = DAY_H1_RE.match(first)
         if not hm:
             problems.append(f"first visible line must be `# Lessons — {d}`, got {first[:40]!r}")
@@ -742,7 +807,7 @@ else:
         if lines is None:
             return None
         for ln in sanitize(lines):
-            if ln.strip() and not is_mark(ln):
+            if ln.strip() and not is_mark(ln) and not LINK_REF_DEF_RE.match(ln):   # a `[x]: url` line renders nothing
                 return ln
         return ""
     firsts = {p.name: first_nonblank(p) for p in vfiles}
