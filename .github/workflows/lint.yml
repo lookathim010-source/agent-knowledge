@@ -18,7 +18,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npx --yes markdownlint-cli2 "**/*.md" "#node_modules"
+      - run: npx --yes markdownlint-cli2@0.23.3 "**/*.md" "#node_modules"
 
   knowledge:
     name: check-knowledge.py
