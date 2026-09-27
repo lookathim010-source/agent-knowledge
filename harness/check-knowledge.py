@@ -13,8 +13,9 @@ has the shape every reader relies on:
                  no orphans, no `## ` headings of its own, and lesson
                  content identical (title, why, do, source) to that day's
                  section in knowledge.md, in the same order
-  verified/      readable files named YYYY-MM-DD_topic_vN.md (real dates)
+  verified/      only readable files named YYYY-MM-DD_topic_vN.md (real dates)
                  whose first non-blank line is a real H1 (not indented 4+)
+  Text inside HTML comments or fenced code blocks never counts as content.
 
 Contract: one line per check (PASS|WARN|FAIL name evidence), final RESULT
 line, exit 0 only when nothing FAILed. `--json` prints one JSON object.
@@ -108,6 +109,33 @@ def strip_html_comments(lines: list[str]) -> list[str]:
     return out
 
 
+FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+
+
+def blank_fenced_code(lines: list[str]) -> list[str]:
+    """Blank out fenced code blocks (``` or ~~~) so their contents never count as content."""
+    out: list[str] = []
+    fence: str | None = None
+    for ln in lines:
+        m = FENCE_RE.match(ln)
+        if fence is None and m:
+            fence = m.group(1)[0]   # opening fence character
+            out.append("")
+            continue
+        if fence is not None:
+            out.append("")
+            if m and m.group(1)[0] == fence:
+                fence = None
+            continue
+        out.append(ln)
+    return out
+
+
+def sanitize(lines: list[str]) -> list[str]:
+    """Lines with HTML comments and fenced code blanked; what a reader actually sees as prose."""
+    return blank_fenced_code(strip_html_comments(lines))
+
+
 def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
     """Return ({date: [lesson]}, [duplicate dates]) for a knowledge-style file.
 
@@ -123,7 +151,7 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
     current: str | None = None
     lesson: dict | None = None
     bad_headings.clear()
-    lines = strip_html_comments(lines)
+    lines = sanitize(lines)
 
     def new_lesson(title: str, malformed: bool) -> dict:
         return {"title": norm(title), "why": "", "do": "", "source": "",
@@ -245,18 +273,18 @@ if not ldir.is_dir():
     else:
         warn("lessons/", "directory missing (no day sections to cover)")
 else:
-    entries = sorted(ldir.glob("*.md"))
+    entries = sorted(ldir.iterdir())                            # every entry, not only *.md
     unreadable = [p.name for p in entries if not p.is_file()]   # dangling symlinks, directories
     if unreadable:
         fail("lessons:readable", f"not readable regular files: {unreadable}")
     files = [p.name for p in entries if p.is_file()]
-    stray = [f for f in files if not DATE_RE.match(f[:-3]) or not valid_date(f[:-3])]
+    stray = [f for f in files if not f.endswith(".md") or not DATE_RE.match(f[:-3]) or not valid_date(f[:-3])]
     if stray:
         fail("lessons:names", f"not a real YYYY-MM-DD.md: {stray}")
     else:
         ok("lessons:names", f"{len(files)} file(s), all dated")
     missing = [d for d in sections if f"{d}.md" not in files]
-    extra = [f[:-3] for f in files if f[:-3] not in sections]
+    extra = [f[:-3] for f in files if f.endswith(".md") and f[:-3] not in sections]
     if missing:
         fail("lessons:coverage", f"days in knowledge.md without a lessons file: {missing}")
     elif sections:
@@ -267,7 +295,7 @@ else:
         p = ldir / f"{d}.md"
         if not p.is_file():
             continue
-        day_lines = p.read_text(encoding="utf-8").splitlines()
+        day_lines = sanitize(p.read_text(encoding="utf-8").splitlines())
         problems: list[str] = []
         stray_headings = [ln.strip() for ln in day_lines if H2_RE.match(ln)]
         if stray_headings:
@@ -309,7 +337,7 @@ vdir = ROOT / "verified"
 if not vdir.is_dir():
     warn("verified/", "directory missing")
 else:
-    ventries = sorted(vdir.glob("*.md"))
+    ventries = sorted(vdir.iterdir())                           # every entry, not only *.md
     vunreadable = [p.name for p in ventries if not p.is_file()]
     if vunreadable:
         fail("verified:readable", f"not readable regular files: {vunreadable}")

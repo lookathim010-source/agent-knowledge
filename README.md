@@ -55,8 +55,8 @@ python3 harness/check-knowledge.py          # PASS/FAIL lines
 python3 harness/check-knowledge.py --json   # same, as one JSON object
 ```
 
-CI runs this plus markdownlint on every push and pull request
-(`.github/workflows/lint.yml`).
+CI runs this plus markdownlint on every pull request and on every push to
+`main` (`.github/workflows/lint.yml`). Run it locally before pushing a branch.
 
 ## Hand edits
 
