@@ -37,6 +37,7 @@ RESULTS: list[dict] = []
 
 KNOWLEDGE_H1 = "# daily-dev-agentic knowledge — T agent"   # the connector depends on this exact line
 
+CODE_SPAN_RE = re.compile(r"(`+)(?!`)(?:.+?)(?<!`)\1(?!`)")   # CommonMark-ish: matching backtick runs, within one string
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SECTION_RE = re.compile(r"^ {0,3}## (\d{4}-\d{2}-\d{2})\s*$")
 LESSON_RE = re.compile(r"^ {0,3}-([ \t]+)\*\*(.+?)\*\*\s*$")     # bold lesson bullet: `-`, 1-4 columns of whitespace (checked after), **title**
@@ -53,10 +54,42 @@ HTML_BLOCK_RE = re.compile(   # CommonMark HTML block starts that CAN interrupt 
     re.IGNORECASE)
 INTERRUPT_RE = re.compile(r"^ {0,3}(?:#{1,6}(?:\s|$)|>|" + THEMATIC_BREAK + ")")
 LINK_LABEL = r"\[(?:\\.|[^\]\\])+\]"                                          # allows escaped \] inside the label
-SOURCE_VALUE_RE = re.compile(r"^ " + LINK_LABEL + r"\(https?://[^)\s]+\).*confidence (\d{1,3})%")
+LINK_OPEN_RE = re.compile(r"^" + LINK_LABEL + r"\(")                       # `[label](` — the destination is scanned by hand
+CONFIDENCE_RE = re.compile(r"confidence (\d{1,3})%")
+
+
+def parse_source(text: str) -> tuple[str, int] | None:
+    """(destination, confidence) for `[label](https://…) … confidence N%`, else None.
+
+    The destination is read the CommonMark way: no whitespace, and parentheses must
+    balance — `https://x.y/(broken)` never closes, so it is not a link at all.
+    """
+    text = text.strip()
+    m = LINK_OPEN_RE.match(text)
+    if not m:
+        return None
+    i, depth = m.end(), 0
+    while i < len(text):
+        c = text[i]
+        if c.isspace():
+            return None
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            if depth == 0:
+                break
+            depth -= 1
+        i += 1
+    else:
+        return None                              # ran off the end without closing the destination
+    dest = text[m.end():i]
+    if not re.match(r"https?://\S+$", dest):
+        return None
+    cm = CONFIDENCE_RE.search(text[i + 1:])
+    return (dest, int(cm.group(1))) if cm else None
 DAY_H1_RE = re.compile(r"^# Lessons — (\d{4}-\d{2}-\d{2})\s*$")
 VERIFIED_NAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_[a-z0-9-]+_v\d+\.md$")
-H1_LINE_RE = re.compile(r"^ {0,3}# \S")   # a real ATX H1: at most 3 leading spaces (4 = code block)
+H1_LINE_RE = re.compile(r"^ {0,3}#[ \t]+\S")   # a real ATX H1 with text: ≤3 leading spaces (4 = code), space or tab after `#`
 FIELDS = ("why", "do", "source")
 H2_RE = re.compile(r"^ {0,3}##(?:\s|$)")   # any ATX H2 (≤3-space indent), including a bare `##`
 bad_headings: list[str] = []   # filled by parse_lessons: H2s that are not valid day headings
@@ -89,7 +122,11 @@ def valid_date(s: str) -> bool:
 
 
 def norm(s: str) -> str:
-    return " ".join(s.split())
+    """Collapse prose whitespace, but keep inline code verbatim (`printf 'a  b'` means two spaces)."""
+    spans: list[str] = []
+    masked = CODE_SPAN_RE.sub(lambda m: (spans.append(m.group(0)), f"\x02{len(spans) - 1}\x02")[1], s)
+    out = " ".join(masked.split())
+    return re.sub(r"\x02(\d+)\x02", lambda m: spans[int(m.group(1))], out)
 
 
 HARD_BREAK = "⏎"   # joins two lines of a field when the first ends in a hard line break (2+ spaces or an odd backslash)
@@ -132,7 +169,6 @@ LIST_ITEM_RE = re.compile(r"^( *)([-*+]|\d{1,9}[.)])([ \t]+)\S")   # marker + wh
 THEMATIC_RE = re.compile(r"^ {0,3}" + THEMATIC_BREAK)                 # `---`, `- - -`, `***`: a thematic break outranks a list item
 HTML_COMMENT_BLOCK_RE = re.compile(r"^ {0,3}<!--")                  # CommonMark HTML block type 2 starts here
 INNER_STRONG_RE = re.compile(r"(?<!\\)\*\*")                        # an unescaped ** inside a title: not ONE strong span
-CODE_SPAN_RE = re.compile(r"(`+)(?!`)(?:.+?)(?<!`)\1(?!`)")   # CommonMark-ish: matching backtick runs
 unclosed: list[str] = []   # filled by sanitize: a fence or comment still open at end of file
 
 
@@ -165,6 +201,40 @@ def content_col(li: re.Match) -> int:
     col = len(li.group(1)) + len(li.group(2))
     gap = gap_cols(col, li.group(3))
     return col + (1 if gap >= 5 else gap)
+
+
+BACKTICK_RUN_RE = re.compile(r"`+")
+
+
+def mask_code(ln: str, open_run: int) -> tuple[str, int]:
+    """Mask inline code with backticks for delimiter scanning; return (masked, open_run_after).
+
+    A backtick run with no same-length closer on its line opens a span that continues
+    on the following lines of the paragraph (CommonMark treats the newline as a space),
+    so `<!--` on the next line inside that span is code, not a comment. `open_run` is
+    the length of such a run carried over from the previous line (0 = none).
+    """
+    runs = [(m.start(), m.end()) for m in BACKTICK_RUN_RE.finditer(ln)]
+    out: list[str] = []
+    i = k = 0
+    if open_run:
+        j = next((idx for idx, (a, b) in enumerate(runs) if b - a == open_run), None)
+        if j is None:
+            return "`" * len(ln), open_run           # the whole line is still code
+        out.append("`" * runs[j][1])
+        i, k, open_run = runs[j][1], j + 1, 0
+    while k < len(runs):
+        a, b = runs[k]
+        j = next((idx for idx in range(k + 1, len(runs)) if runs[idx][1] - runs[idx][0] == b - a), None)
+        if j is None:                                 # opens a span that may close on a later line
+            out.append(ln[i:a])
+            out.append("`" * (len(ln) - a))
+            return "".join(out), b - a
+        out.append(ln[i:a])
+        out.append("`" * (runs[j][1] - a))
+        i, k = runs[j][1], j + 1
+    out.append(ln[i:])
+    return "".join(out), 0
 
 
 def fence_match(ln: str, base: int) -> re.Match | None:
@@ -201,10 +271,13 @@ def sanitize(lines: list[str]) -> list[str]:
     fence_base = 0
     in_comment = False
     block_comment = False        # the open comment began a line: the whole closing line is HTML, not prose
+    open_run = 0                 # length of an inline-code backtick run still open from the previous line
     containers: list[int] = []   # content columns of the open list items, innermost last
     unclosed.clear()
     for ln in lines:
         ln = expand_lead(ln)
+        if not ln.strip():
+            open_run = 0             # a code span cannot cross a blank line (the paragraph ends)
         if fence_char is not None:
             m = fence_match(ln, fence_base)
             if m and m.group(1)[0] == fence_char and len(m.group(1)) >= fence_len and m.group(2).strip() == "":
@@ -244,11 +317,12 @@ def sanitize(lines: list[str]) -> list[str]:
         # backtick (that line is an inline code span, not a fence); tilde fences may.
         if m and not (m.group(1)[0] == "`" and "`" in m.group(2)):
             fence_char, fence_len, fence_base = m.group(1)[0], len(m.group(1)), base
+            open_run = 0
             out.append(" " * (len(ln) - len(ln.lstrip(" "))) + FENCE_MARK)
             continue
         # Inline code spans are opaque: a <!-- inside `…` is code, not a comment opener.
         # Mask them (same length, harmless chars) for delimiter scanning; restore text after.
-        scan = CODE_SPAN_RE.sub(lambda m: "`" * len(m.group(0)), ln)
+        scan, open_run = mask_code(ln, open_run)
         buf: list[str] = []
         i = 0
         while i < len(scan):
@@ -295,7 +369,7 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
     lines = sanitize(lines)
 
     def new_lesson(title: str, malformed: bool) -> dict:
-        return {"title": norm(title), "why": "", "do": "", "source": "", "col": 2, "last": None, "hard": False,
+        return {"title": norm(title), "why": "", "do": "", "source": "", "source_raw": "", "col": 2, "last": None, "hard": False,
                 "seen": {"why": False, "do": False, "source": False},
                 "problems": (["not-a-bold-lesson-bullet"] if malformed else [])}
 
@@ -308,7 +382,7 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
         if lesson["last"] is not None:
             key = lesson["last"]
             if key == "source":
-                lesson["source"] = norm(lesson["source"] + sep + text) if lesson["source"] else lesson["source"]
+                lesson["source_raw"] = norm(lesson["source_raw"] + sep + text)
             else:
                 lesson[key] = norm(lesson[key] + sep + text)
         elif not any(lesson["seen"].values()):
@@ -403,18 +477,12 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
         if lesson["seen"][key]:
             lesson["problems"].append(f"duplicate {key}")
         lesson["seen"][key] = True
+        # The value may continue on the next line(s); emptiness and the source shape are
+        # judged once the whole field has been assembled (see the finalisation loop).
         if key == "source":
-            sm = SOURCE_VALUE_RE.match(value)
-            if not sm:
-                lesson["problems"].append("source line is not `[title](https://…) … confidence N%`")
-            elif not 0 <= int(sm.group(1)) <= 100:
-                lesson["problems"].append(f"confidence {sm.group(1)}% out of 0-100")
-            else:
-                lesson["source"] = norm(value)
-        elif value.strip():
-            lesson[key] = norm(value)
+            lesson["source_raw"] = norm(value)
         else:
-            lesson["problems"].append(f"missing or empty {key}")
+            lesson[key] = norm(value)
 
     for ls in sections.values():
         for l in ls:
@@ -423,6 +491,16 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
             for k in FIELDS:
                 if not l["seen"][k]:
                     l["problems"].append(f"missing {k}")
+                elif k != "source" and not l[k]:
+                    l["problems"].append(f"missing or empty {k}")
+            if l["seen"]["source"]:
+                parsed = parse_source(l["source_raw"])
+                if parsed is None:
+                    l["problems"].append("source line is not `[title](https://…) … confidence N%`")
+                elif not 0 <= parsed[1] <= 100:
+                    l["problems"].append(f"confidence {parsed[1]}% out of 0-100")
+                else:
+                    l["source"] = l["source_raw"]
     return sections, duplicates
 
 
@@ -438,7 +516,9 @@ def lesson_key(l: dict) -> tuple[str, str, str, str]:
 # --- knowledge.md ----------------------------------------------------------
 kpath = ROOT / "knowledge.md"
 sections: dict[str, list[dict]] = {}
-if not kpath.is_file():
+if kpath.is_symlink():
+    fail("knowledge.md", "is a symlink — the managed file must be a real file inside the repo (connector writes would go to the target)")
+elif not kpath.is_file():
     fail("knowledge.md", "missing")
 else:
     lines = read_lines(kpath) or []
