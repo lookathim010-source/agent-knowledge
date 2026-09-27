@@ -48,8 +48,10 @@ FIELD_LABEL_RE = re.compile(r"^( *)-([ \t]+)(Why it matters here|Do|Source):(.*)
 THEMATIC_BREAK = r"(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$"   # 3+ of the SAME character (`- * -` is not a break)
 INTERRUPT_RE = re.compile(r"^ {0,3}(?:#{1,6}(?:[ \t]|$)|>|" + THEMATIC_BREAK + ")")
 ATX_RE = re.compile(r"^ {0,3}#{1,6}(?:[ \t]|$)")                                   # any ATX heading
-LINK_REF_DEF_RE = re.compile(r"^ {0,3}\[(?:\\.|[^\]\\])+\]:[ \t]*\S")          # `[label]: dest …` renders nothing
-REF_TITLE_RE = re.compile(r"""^[ \t]*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\((?:[^()\\]|\\.)*\))[ \t]*$""")   # a ref def's title alone on the next line
+_REF_TITLE = r"""(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\((?:[^()\\]|\\.)*\))"""
+LINK_REF_DEF_RE = re.compile(   # a COMPLETE `[label]: destination ["title"]` line — anything else after the destination is prose
+    r"^ {0,3}\[(?:\\.|[^\]\\])+\]:[ \t]*(?:<[^<>]*>|[^ \t<][^ \t]*)(?:[ \t]+" + _REF_TITLE + r")?[ \t]*$")
+REF_TITLE_RE = re.compile(r"^[ \t]*" + _REF_TITLE + r"[ \t]*$")   # a ref def's title alone on the next line
 
 
 def first_visible(lines: list[str]) -> str:
@@ -126,6 +128,7 @@ H1_LINE_RE = re.compile(r"^ {0,3}#[ \t]+\S")   # a real ATX H1 with text: ≤3 l
 FIELDS = ("why", "do", "source")
 H2_RE = re.compile(r"^ {0,3}##(?:[ \t]|$)")   # any ATX H2 (≤3-space indent), including a bare `##`; NBSP is not a separator
 bad_headings: list[str] = []   # filled by parse_lessons: H2s that are not valid day headings
+SETEXT_H2_RE = re.compile(r"^ {0,3}-+[ \t]*$")   # a dash underline directly under a top-level paragraph line makes it an H2
 misplaced: list[str] = []      # filled by parse_lessons: top-level bullets that sit under no `## YYYY-MM-DD`
 
 
@@ -425,7 +428,7 @@ def sanitize(lines: list[str]) -> list[str]:
             in_paragraph = False
         if fence_char is not None:
             m = fence_match(ln, fence_base)
-            if m and m.group(1)[0] == fence_char and len(m.group(1)) >= fence_len and m.group(2).strip() == "":
+            if m and m.group(1)[0] == fence_char and len(m.group(1)) >= fence_len and m.group(2).strip(" \t") == "":   # NBSP etc. is content
                 fence_char = None
             out.append("")
             continue
@@ -558,8 +561,17 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
         lesson["hard"] = ends_hard(ln)
 
     prev_blank = True
-    for ln in lines:
+    top_para: str | None = None   # the previous line, when it was a top-level paragraph line (a Setext underline may follow)
+    for idx, ln in enumerate(lines):
         was_prev_blank, prev_blank = prev_blank, not ln.strip()
+        prev_top_para, top_para = top_para, None
+        # A dash underline right under a top-level paragraph line turns that line into an H2
+        # (Setext). It is never a day heading, so it is a bad heading that ends the section.
+        if prev_top_para is not None and SETEXT_H2_RE.match(ln):
+            bad_headings.append(prev_top_para.strip()[:60] + " / " + ln.strip()[:20])
+            current = None
+            lesson = None
+            continue
         if ln.startswith(CONT_MARK):              # paragraph text that began inside an inline comment
             if lesson is not None and current is not None and not was_prev_blank:
                 absorb(lesson, ln[len(CONT_MARK):])
@@ -586,8 +598,14 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
             lesson = None
             continue
         if current is None:
-            if TOP_BULLET_RE.match(ln) and not THEMATIC_RE.match(ln):   # a bullet under no day heading: readers never see it as a lesson
+            # Nothing visible belongs outside a day section except the file's H1 on its first line:
+            # a bullet, a paragraph, a thematic break, a code block — readers see it, no day file has it.
+            if ln.strip() and not is_mark(ln) and not (idx == 0 and H1_LINE_RE.match(ln)) and not LINK_REF_DEF_RE.match(ln):
                 misplaced.append(ln.strip()[:60])
+            if ln.strip() in (FENCE_MARK, HTML_MARK):   # a comment renders nothing and is allowed metadata
+                misplaced.append("<code block or raw HTML>")
+            if ln.strip() and not TOP_BULLET_RE.match(ln) and not INTERRUPT_RE.match(ln) and not is_mark(ln):
+                top_para = ln
             continue
         # CommonMark: a line indented at or past the current lesson's content column
         # (marker + the whitespace after it, tabs expanded) belongs to that lesson;
@@ -624,6 +642,9 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
                 lesson["hard"] = ends_hard(ln)
                 sections[current].append(lesson)
                 continue
+            if ln.strip() and not is_mark(ln) and not INTERRUPT_RE.match(ln) and not HTML_BLOCK_RE.match(ln) and (
+                    lesson is None or was_prev_blank):
+                top_para = ln                          # a top-level paragraph line: a `---` next would make it an H2
             if lesson is not None and ln.strip():
                 if not was_prev_blank and not INTERRUPT_RE.match(ln) and not HTML_BLOCK_RE.match(ln) and not is_mark(ln):
                     # Lazy continuation (CommonMark): a non-blank, non-list line directly
@@ -723,7 +744,7 @@ else:
     else:
         ok("knowledge:headings", "every H2 is a day heading")
     if k_misplaced:
-        fail("knowledge:misplaced", f"{len(k_misplaced)} top-level bullet(s) outside any `## YYYY-MM-DD` section: {k_misplaced[:3]}")
+        fail("knowledge:misplaced", f"{len(k_misplaced)} visible block(s) outside any `## YYYY-MM-DD` section: {k_misplaced[:3]}")
     if not dates:
         fail("knowledge:sections", "no `## YYYY-MM-DD` sections")
     else:
@@ -798,6 +819,8 @@ else:
             problems.append(f"contains H2 heading(s) {stray_headings[:4]} — a per-day file has no `## ` headings")
         # A per-day file carries no `## ` heading of its own: parse it as that day's section.
         day_sections, _ = parse_lessons([f"## {d}"] + [ln for ln in day_lines if not H2_RE.match(ln)])
+        if bad_headings:
+            problems.append(f"contains Setext H2 heading(s) {bad_headings[:4]} — a per-day file has no `## ` headings")
         day_lessons = day_sections.get(d, [])
         bad_day = shape_errors({d: day_lessons})
         if bad_day:
