@@ -8,14 +8,15 @@ has the shape every reader relies on:
                  (real calendar dates, no repeats, no other H2s) newest first; every top-level
                  bullet in a section is a bold lesson with a non-empty
                  "Why it matters here:", a non-empty "Do:", and a "Source:"
-                 line carrying a link and a 0-100 confidence
-  lessons/       one readable YYYY-MM-DD.md per day section in knowledge.md,
-                 headed `# Lessons — <that date>`, no orphans, no `## `
-                 headings of its own, and lesson
-                 content identical (title, why, do, source) to that day's
-                 section in knowledge.md, in the same order
-  verified/      only readable files named YYYY-MM-DD_topic_vN.md (real dates)
-                 whose first non-blank line is a real H1 (not indented 4+)
+                 line carrying a link and a 0-100 confidence; a bullet
+                 outside every day section is a FAIL (readers never see it)
+  lessons/       one regular (non-symlink) YYYY-MM-DD.md per day section in
+                 knowledge.md, headed `# Lessons — <that date>`, no orphans,
+                 no `## ` headings of its own, and lesson content identical
+                 (title, why, do, source — continuation lines included) to
+                 that day's section in knowledge.md, in the same order
+  verified/      only regular files named YYYY-MM-DD_topic_vN.md (real dates)
+                 whose first visible non-blank line is a real H1 (not indented 4+)
   Text inside HTML comments or fenced code blocks never counts as content.
 
 Contract: one line per check (PASS|WARN|FAIL name evidence), final RESULT
@@ -38,9 +39,12 @@ KNOWLEDGE_H1 = "# daily-dev-agentic knowledge — T agent"   # the connector dep
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SECTION_RE = re.compile(r"^ {0,3}## (\d{4}-\d{2}-\d{2})\s*$")
-LESSON_RE = re.compile(r"^ {0,3}- \*\*(.+?)\*\*\s*$")           # well-formed bold lesson bullet (≤3-space indent is still top level)
-TOP_BULLET_RE = re.compile(r"^ {0,3}(?:[-*+]|\d+[.)])(?: +\S|\s*$)")   # any top-level list item incl. an EMPTY one, any marker, ≤3-space indent
-FIELD_LABEL_RE = re.compile(r"^\s*- (Why it matters here|Do|Source):(.*)$")   # label first, value validated after (nesting checked by indent)
+LESSON_RE = re.compile(r"^ {0,3}-[ \t]\*\*(.+?)\*\*\s*$")        # well-formed bold lesson bullet (≤3-space indent is still top level; space or tab after `-`)
+TOP_BULLET_RE = re.compile(r"^ {0,3}(?:[-*+]|\d+[.)])(?:[ \t]+\S|\s*$)")   # any top-level list item incl. an EMPTY one, any marker, space or tab after it
+FIELD_LABEL_RE = re.compile(r"^\s*-[ \t](Why it matters here|Do|Source):(.*)$")   # label first, value validated after (nesting checked by indent)
+# Blocks that interrupt a paragraph (CommonMark): an ATX heading, a block quote, a thematic break.
+# A line like this at top level is never lazy continuation of the lesson above it.
+INTERRUPT_RE = re.compile(r"^ {0,3}(?:#{1,6}(?:\s|$)|>|(?:[-*_][ \t]*){3,}$)")
 LINK_LABEL = r"\[(?:\\.|[^\]\\])+\]"                                          # allows escaped \] inside the label
 SOURCE_VALUE_RE = re.compile(r"^ " + LINK_LABEL + r"\(https?://[^)\s]+\).*confidence (\d{1,3})%")
 DAY_H1_RE = re.compile(r"^# Lessons — (\d{4}-\d{2}-\d{2})\s*$")
@@ -49,6 +53,7 @@ H1_LINE_RE = re.compile(r"^ {0,3}# \S")   # a real ATX H1: at most 3 leading spa
 FIELDS = ("why", "do", "source")
 H2_RE = re.compile(r"^ {0,3}##(?:\s|$)")   # any ATX H2 (≤3-space indent), including a bare `##`
 bad_headings: list[str] = []   # filled by parse_lessons: H2s that are not valid day headings
+misplaced: list[str] = []      # filled by parse_lessons: top-level bullets that sit under no `## YYYY-MM-DD`
 
 
 def record(status: str, name: str, detail: str) -> None:
@@ -78,6 +83,18 @@ def valid_date(s: str) -> bool:
 
 def norm(s: str) -> str:
     return " ".join(s.split())
+
+
+def regular_file(p: pathlib.Path) -> bool:
+    """True only for a plain file: symlinks (live or dangling) and directories are rejected.
+
+    `is_file()` follows a symlink, so a link pointing outside the repo would be read
+    and checked as if it were repo content; `lstat()` looks at the entry itself.
+    """
+    try:
+        return not p.is_symlink() and p.is_file()
+    except OSError:
+        return False
 
 
 def read_lines(p: pathlib.Path) -> list[str] | None:
@@ -123,7 +140,9 @@ def sanitize(lines: list[str]) -> list[str]:
             in_comment = False
             ln = ln[j + 3:]          # the rest of the line is prose again
         m = FENCE_RE.match(ln)
-        if m:
+        # CommonMark: a backtick fence cannot open when its info string contains a
+        # backtick (that line is an inline code span, not a fence); tilde fences may.
+        if m and not (m.group(1)[0] == "`" and "`" in m.group(2)):
             fence_char, fence_len = m.group(1)[0], len(m.group(1))
             out.append("")
             continue
@@ -172,6 +191,7 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
     current: str | None = None
     lesson: dict | None = None
     bad_headings.clear()
+    misplaced.clear()
     lines = sanitize(lines)
 
     def new_lesson(title: str, malformed: bool) -> dict:
@@ -179,7 +199,20 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
                 "seen": {"why": False, "do": False, "source": False},
                 "problems": (["not-a-bold-lesson-bullet"] if malformed else [])}
 
+    def absorb(lesson: dict, text: str) -> None:
+        """Continuation text belongs to the field above it — or to the title when no field has started."""
+        if lesson["last"] is not None:
+            key = lesson["last"]
+            if key == "source":
+                lesson["source"] = norm(lesson["source"] + " " + text) if lesson["source"] else lesson["source"]
+            else:
+                lesson[key] = norm(lesson[key] + " " + text)
+        elif not any(lesson["seen"].values()):
+            lesson["title"] = norm(lesson["title"] + " " + text)
+
+    prev_blank = True
     for ln in lines:
+        was_prev_blank, prev_blank = prev_blank, not ln.strip()
         m = SECTION_RE.match(ln)
         if m:
             current = m.group(1)
@@ -195,6 +228,8 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
             lesson = None
             continue
         if current is None:
+            if TOP_BULLET_RE.match(ln):           # a lesson-shaped bullet under no day heading: readers never see it as a lesson
+                misplaced.append(ln.strip()[:60])
             continue
         indent = len(ln) - len(ln.lstrip(" "))
         # CommonMark: a line indented at or past the current lesson's content column
@@ -202,7 +237,7 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
         nested = lesson is not None and indent >= lesson["indent"] + 2
         if not nested:
             m = LESSON_RE.match(ln)
-            if m:
+            if m and m.group(1).strip():          # `- ** **` is not bold text, so not a lesson title
                 lesson = new_lesson(m.group(1), malformed=False)
                 lesson["indent"] = indent
                 sections[current].append(lesson)
@@ -213,6 +248,10 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
                 lesson["indent"] = indent
                 sections[current].append(lesson)
                 continue
+            # Lazy continuation (CommonMark): a non-blank, non-list line directly under
+            # a paragraph — even at indent 0 — is still that paragraph's text.
+            if lesson is not None and not was_prev_blank and ln.strip() and not INTERRUPT_RE.match(ln):
+                absorb(lesson, ln.strip())
             continue
         # Nested line. A child list marker is valid only at indent lesson+2 .. lesson+5
         # (CommonMark: ≥ content column + 4 is an indented code block, not a list).
@@ -222,16 +261,10 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
             lesson["last"] = None
             continue
         if not m:
-            # continuation text (lazy or indented) belongs to the field above it — or to the title
+            # continuation text (indented) belongs to the field above it — or to the title
             text = ln.strip()
-            if text and lesson["last"] is not None:
-                key = lesson["last"]
-                if key == "source":
-                    lesson["source"] = norm(lesson["source"] + " " + text) if lesson["source"] else lesson["source"]
-                else:
-                    lesson[key] = norm(lesson[key] + " " + text)
-            elif text and lesson["last"] is None and not lesson["seen"]["why"] and not lesson["seen"]["do"] and not lesson["seen"]["source"]:
-                lesson["title"] = norm(lesson["title"] + " " + text)
+            if text:
+                absorb(lesson, text)
             continue
         label, value = m.group(1), m.group(2)
         key = {"Why it matters here": "why", "Do": "do", "Source": "source"}[label]
@@ -287,11 +320,14 @@ else:
     if k_unclosed:
         fail("knowledge:unclosed", "; ".join(k_unclosed) + " — everything after it is hidden from readers")
     k_bad_headings = list(bad_headings)
+    k_misplaced = list(misplaced)
     dates = list(sections)
     if k_bad_headings:
         fail("knowledge:headings", f"H2 headings that are not `## YYYY-MM-DD`: {k_bad_headings[:4]}")
     else:
         ok("knowledge:headings", "every H2 is a day heading")
+    if k_misplaced:
+        fail("knowledge:misplaced", f"{len(k_misplaced)} top-level bullet(s) outside any `## YYYY-MM-DD` section: {k_misplaced[:3]}")
     if not dates:
         fail("knowledge:sections", "no `## YYYY-MM-DD` sections")
     else:
@@ -327,10 +363,10 @@ if not ldir.is_dir():
         warn("lessons/", "directory missing (no day sections to cover)")
 else:
     entries = sorted(ldir.iterdir())                            # every entry, not only *.md
-    unreadable = [p.name for p in entries if not p.is_file()]   # dangling symlinks, directories
+    unreadable = [p.name for p in entries if not regular_file(p)]   # symlinks (live or dangling), directories
     if unreadable:
-        fail("lessons:readable", f"not readable regular files: {unreadable}")
-    files = [p.name for p in entries if p.is_file()]
+        fail("lessons:readable", f"not regular files (symlinks and directories are rejected): {unreadable}")
+    files = [p.name for p in entries if regular_file(p)]
     stray = [f for f in files if not f.endswith(".md") or not DATE_RE.match(f[:-3]) or not valid_date(f[:-3])]
     if stray:
         fail("lessons:names", f"not a real YYYY-MM-DD.md: {stray}")
@@ -346,7 +382,7 @@ else:
         fail("lessons:orphans", f"lessons files with no knowledge.md section: {extra}")
     for d in sections:
         p = ldir / f"{d}.md"
-        if not p.is_file():
+        if not regular_file(p):
             continue
         raw = read_lines(p)
         if raw is None:
@@ -400,27 +436,28 @@ if not vdir.is_dir():
     warn("verified/", "directory missing")
 else:
     ventries = sorted(vdir.iterdir())                           # every entry, not only *.md
-    vunreadable = [p.name for p in ventries if not p.is_file()]
+    vunreadable = [p.name for p in ventries if not regular_file(p)]
     if vunreadable:
-        fail("verified:readable", f"not readable regular files: {vunreadable}")
-    vfiles = [p for p in ventries if p.is_file()]
+        fail("verified:readable", f"not regular files (symlinks and directories are rejected): {vunreadable}")
+    vfiles = [p for p in ventries if regular_file(p)]
     badnames = [p.name for p in vfiles if not VERIFIED_NAME_RE.match(p.name) or not valid_date(p.name[:10])]
     if badnames:
         fail("verified:names", f"not a real YYYY-MM-DD_topic_vN.md: {badnames}")
     else:
         ok("verified:names", f"{len(vfiles)} sheet(s), all dated and versioned")
     def first_nonblank(p: pathlib.Path) -> str | None:
+        """First line a reader sees as prose: comments and fenced code are skipped, not counted."""
         lines = read_lines(p)
         if lines is None:
             return None
-        for ln in lines:
+        for ln in sanitize(lines):
             if ln.strip():
                 return ln
         return ""
     firsts = {p.name: first_nonblank(p) for p in vfiles}
     noh1 = [n for n, f in firsts.items() if f is not None and not H1_LINE_RE.match(f)]
     if noh1:
-        fail("verified:h1", f"first non-blank line is not an H1 (indent ≤3, `# `): {noh1}")
+        fail("verified:h1", f"first visible non-blank line is not an H1 (indent ≤3, `# `; comments and code ignored): {noh1}")
     elif vfiles:
         ok("verified:h1", "every sheet starts with an H1")
 
