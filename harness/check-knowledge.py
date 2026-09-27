@@ -107,8 +107,20 @@ def read_lines(p: pathlib.Path) -> list[str] | None:
 
 
 FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+LIST_ITEM_RE = re.compile(r"^( *)([-*+]|\d{1,9}[.)])( +)\S")   # marker + 1..n spaces + content (for container tracking)
 CODE_SPAN_RE = re.compile(r"(`+)(?!`)(?:.+?)(?<!`)\1(?!`)")   # CommonMark-ish: matching backtick runs
 unclosed: list[str] = []   # filled by sanitize: a fence or comment still open at end of file
+
+
+def fence_match(ln: str, base: int) -> re.Match | None:
+    """FENCE_RE applied relative to the innermost open list item's content column.
+
+    CommonMark strips a list item's content indentation before block parsing, so a
+    fence nested under `  - Do:` (content column 4) is a fence at 4..7 spaces.
+    """
+    if len(ln) - len(ln.lstrip(" ")) < base:
+        return None
+    return FENCE_RE.match(ln[base:])
 
 
 def sanitize(lines: list[str]) -> list[str]:
@@ -118,16 +130,20 @@ def sanitize(lines: list[str]) -> list[str]:
     `<!--` in code cannot open a comment) and the block closes only on a fence
     of the same character at least as long as the opener with nothing but
     spaces after it. Inside a comment, nothing is interpreted (a ``` in a
-    comment cannot open a fence) until `-->`. Line count is preserved.
+    comment cannot open a fence) until `-->`. Fences are recognised relative
+    to the content column of the innermost open list item, so a code block
+    nested under a lesson field is code too. Line count is preserved.
     """
     out: list[str] = []
     fence_char: str | None = None
     fence_len = 0
+    fence_base = 0
     in_comment = False
+    containers: list[int] = []   # content columns of the open list items, innermost last
     unclosed.clear()
     for ln in lines:
         if fence_char is not None:
-            m = FENCE_RE.match(ln)
+            m = fence_match(ln, fence_base)
             if m and m.group(1)[0] == fence_char and len(m.group(1)) >= fence_len and m.group(2).strip() == "":
                 fence_char = None
             out.append("")
@@ -139,11 +155,23 @@ def sanitize(lines: list[str]) -> list[str]:
                 continue
             in_comment = False
             ln = ln[j + 3:]          # the rest of the line is prose again
-        m = FENCE_RE.match(ln)
+        # Track which list items are still open: a non-blank line shallower than an
+        # item's content column closes that item (and everything nested in it).
+        if ln.strip():
+            indent = len(ln) - len(ln.lstrip(" "))
+            while containers and indent < containers[-1]:
+                containers.pop()
+            li = LIST_ITEM_RE.match(ln)
+            if li:
+                gap = len(li.group(3))
+                col = len(li.group(1)) + len(li.group(2)) + (1 if gap >= 5 else gap)   # ≥5 spaces = code inside the item
+                containers.append(col)
+        base = containers[-1] if containers else 0
+        m = fence_match(ln, base)
         # CommonMark: a backtick fence cannot open when its info string contains a
         # backtick (that line is an inline code span, not a fence); tilde fences may.
         if m and not (m.group(1)[0] == "`" and "`" in m.group(2)):
-            fence_char, fence_len = m.group(1)[0], len(m.group(1))
+            fence_char, fence_len, fence_base = m.group(1)[0], len(m.group(1)), base
             out.append("")
             continue
         # Inline code spans are opaque: a <!-- inside `…` is code, not a comment opener.
@@ -248,10 +276,16 @@ def parse_lessons(lines: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
                 lesson["indent"] = indent
                 sections[current].append(lesson)
                 continue
-            # Lazy continuation (CommonMark): a non-blank, non-list line directly under
-            # a paragraph — even at indent 0 — is still that paragraph's text.
-            if lesson is not None and not was_prev_blank and ln.strip() and not INTERRUPT_RE.match(ln):
-                absorb(lesson, ln.strip())
+            if lesson is not None and ln.strip():
+                if not was_prev_blank and not INTERRUPT_RE.match(ln):
+                    # Lazy continuation (CommonMark): a non-blank, non-list line directly
+                    # under a paragraph — even at indent 0 — is still that paragraph's text.
+                    absorb(lesson, ln.strip())
+                else:
+                    # A heading, thematic break, block quote, or a paragraph after a blank
+                    # line closes the list: fields that follow render as a NEW list, not
+                    # as this lesson's, so they must not reconnect to it.
+                    lesson = None
             continue
         # Nested line. A child list marker is valid only at indent lesson+2 .. lesson+5
         # (CommonMark: ≥ content column + 4 is an indented code block, not a list).
