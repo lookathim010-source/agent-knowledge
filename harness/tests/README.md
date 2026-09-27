@@ -7,11 +7,11 @@ structural check, not the copy comparison, has to catch it), runs
 containing a given string, `pos` expects PASS, and `stray_only` expects a
 `knowledge:stray` FAIL without the wrong diagnosis.
 
-The suite numbers follow the review rounds that produced them (round 11 to
-round 27 of the review on PR #1). Cases marked `CORRECTED 2026-09-27` encoded a
-CommonMark reading that the reference implementation (commonmark.js 0.31.2)
-proved wrong. Each correction keeps a replacement case for the intent that
-survives.
+The suite numbers follow the review rounds that produced them (rounds 11 to
+27 of the review on PR #1, round 28 on PR #2). Cases marked
+`CORRECTED 2026-09-27` encoded a CommonMark reading that the reference
+implementation (commonmark.js 0.31.2) proved wrong. Each correction keeps a
+replacement case for the intent that survives.
 
 ```bash
 pip install -r harness/requirements.txt

@@ -178,5 +178,35 @@
   "id": "lowercase-decl-after-field",
   "markdown": "- **T**\n  - Do: y\n<!foo> extra\n",
   "why": "a lowercase declaration interrupts and closes the list"
+ },
+ {
+  "id": "pre-then-code-span",
+  "markdown": "- **T**\n  - Why it matters here: x\n\n    ```\n    x\n    ```\n\n  - Do: `y`A\n",
+  "why": "a fence inside a field item, then an inline code span in the next field"
+ },
+ {
+  "id": "comment-only-field",
+  "markdown": "- **T**\n  - Why it matters here: <!-- hidden -->\n  - Do: y\n",
+  "why": "a field whose only content is an inline comment"
+ },
+ {
+  "id": "comment-block-only-field",
+  "markdown": "- **T**\n  - Do:\n\n    <!-- hidden block -->\n\n  - Source: s\n",
+  "why": "a field whose only content is a comment block"
+ },
+ {
+  "id": "comment-inside-label",
+  "markdown": "- **T**\n  - Why<!-- note --> it matters here: x\n",
+  "why": "an inline comment inside a field label"
+ },
+ {
+  "id": "code-splits-confidence",
+  "markdown": "Source: [T](https://x.y) — A · confi`code`dence 80%\n",
+  "why": "a code span inside the confidence word"
+ },
+ {
+  "id": "image-splits-confidence",
+  "markdown": "Source: [T](https://x.y) — A · confi![i](https://x.y/i.png)dence 80%\n",
+  "why": "an image inside the confidence word"
  }
 ]

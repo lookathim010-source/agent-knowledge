@@ -43,10 +43,17 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 try:
     from knowledge_md import MD                       # markdown-it-py, CommonMark preset, conformance-patched
-except ImportError:                                   # the contract still holds: a FAIL line, a RESULT line, exit 1
-    print("FAIL harness:deps             markdown-it-py is not installed — run: pip install -r harness/requirements.txt")
-    print("----")
-    print("RESULT: FAIL — 0 pass, 0 warn, 1 fail")
+except Exception as exc:                              # missing, or a release whose internals the patches no longer fit
+    _why = ("markdown-it-py is not installed" if isinstance(exc, ImportError) and "markdown_it" in str(exc)
+            else f"markdown-it-py failed to load ({type(exc).__name__}: {exc})")
+    _detail = f"{_why} — run: pip install -r harness/requirements.txt"
+    if "--json" in sys.argv:                          # the contract holds in both modes: one JSON object, or lines
+        print(json.dumps({"ok": False, "pass": 0, "warn": 0, "fail": 1,
+                          "checks": [{"status": "FAIL", "name": "harness:deps", "detail": _detail}]}))
+    else:
+        print(f"FAIL harness:deps             {_detail}")
+        print("----")
+        print("RESULT: FAIL — 0 pass, 0 warn, 1 fail")
     sys.exit(1)
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -63,6 +70,7 @@ FIELDS = ("why", "do", "source")
 CONFIDENCE_RE = re.compile(r"(?<![A-Za-z0-9_])confidence ([0-9]{1,3})%(?![0-9%])")   # a standalone label only
 MARKER_RE = re.compile(r"^[ \t]*(?:[-*+]|[0-9]{1,9}[.)])[ \t]*")
 WS = " \t\n\r\f"                                    # HTML/CommonMark whitespace; a NBSP is content
+SEP = "\ufffc"   # stands in for visible non-text inline content (code, image, displayed raw HTML): it splits words
 
 # Raw HTML a browser never displays. Each alternative also swallows an unterminated
 # opener to the end, because an unclosed comment hides everything after it.
@@ -197,15 +205,16 @@ def visible_html(html: str) -> str:
     whitespace collapsed outside <pre>/<code>, and dropped next to block boundaries."""
     html = INVISIBLE_RE.sub("", html)
     parts: list[str] = []
-    i = 0
-    for m in PROTECT_RE.finditer(html):
-        seg = collapse(html[i:m.start()])
-        parts.append(seg.rstrip(WS) if m.group(0)[:4].lower() == "<pre" else seg)
+    i, after_pre = 0, False
+    for m in PROTECT_RE.finditer(html):               # offsets index `html`, so it is never modified here
+        seg = html[i:m.start()]
+        seg = collapse(seg.lstrip(WS) if after_pre else seg)
+        after_pre = m.group(0)[:4].lower() == "<pre"
+        parts.append(seg.rstrip(WS) if after_pre else seg)
         parts.append(m.group(0))
         i = m.end()
-        if m.group(0)[:4].lower() == "<pre":
-            html = html[:i] + html[i:].lstrip(WS)
-    parts.append(collapse(html[i:]))
+    tail = html[i:]
+    parts.append(collapse(tail.lstrip(WS) if after_pre else tail))
     return "".join(parts).strip(WS)
 
 
@@ -232,23 +241,57 @@ def inline_tokens(inline) -> list:
     return [c for c in inline.children if not (c.type == "text" and c.content == "")]
 
 
+def invisible_inline(c) -> bool:
+    """An inline raw-HTML token a browser never displays (a comment, PI, declaration, CDATA)."""
+    return c.type == "html_inline" and not INVISIBLE_RE.sub("", c.content).strip(WS)
+
+
+def visible_text(tokens) -> str:
+    """The text a reader sees in a run of inline tokens. Formatting delimiters (emphasis, link
+    brackets) and invisible raw HTML are zero-width; line breaks read as a space; other visible
+    content (code, an image, raw HTML that displays) becomes SEP, so it splits the words around it."""
+    out = []
+    for c in tokens:
+        if c.type == "text":
+            out.append(c.content)
+        elif c.type in ("softbreak", "hardbreak"):
+            out.append(" ")
+        elif c.type in ("code_inline", "image") or (c.type == "html_inline" and not invisible_inline(c)):
+            out.append(SEP)
+    return "".join(out)
+
+
+def lead_text(tokens) -> str:
+    """The paragraph's leading plain text (invisible raw HTML skipped): where a field label must sit."""
+    out = []
+    for c in tokens:
+        if c.type == "text":
+            out.append(c.content)
+        elif not invisible_inline(c):
+            break
+    return "".join(out)
+
+
 def parse_source(inline) -> int | None:
     """Confidence N for a Source field rendering as `Source: <link to http(s)> … confidence N%`,
     else None. Only visible text after the link counts — never link text, code or HTML attributes."""
-    all_ch = inline_tokens(inline)
-    ch = [c for c in all_ch if c.type != "softbreak"]
-    if not ch or ch[0].type != "text" or ch[0].content[len("Source:"):].strip(" \t"):
+    toks = [c for c in inline_tokens(inline) if not invisible_inline(c)]
+    k, lead = 0, ""
+    while k < len(toks) and toks[k].type == "text":
+        lead += toks[k].content
+        k += 1
+    if not lead.startswith("Source:") or lead[len("Source:"):].strip(" \t"):
         return None
-    if len(ch) < 2 or ch[1].type != "link_open" or ch[1].markup == "autolink":
+    while k < len(toks) and toks[k].type == "softbreak":
+        k += 1
+    if k >= len(toks) or toks[k].type != "link_open" or toks[k].markup == "autolink":
         return None
-    if not re.match(r"https?://[^ \t]+$", ch[1].attrGet("href") or ""):
+    if not re.match(r"https?://[^ \t]+$", toks[k].attrGet("href") or ""):
         return None
-    k = next((i for i in range(2, len(ch)) if ch[i].type == "link_close"), None)
-    if k is None:
+    close = next((j for j in range(k + 1, len(toks)) if toks[j].type == "link_close"), None)
+    if close is None:
         return None
-    tail = "".join(c.content if c.type == "text" else " " for c in all_ch[all_ch.index(ch[k]) + 1:]
-                   if c.type in ("text", "softbreak", "hardbreak"))
-    m = CONFIDENCE_RE.search(tail)
+    m = CONFIDENCE_RE.search(visible_text(toks[close + 1:]))
     return int(m.group(1)) if m else None
 
 
@@ -299,7 +342,9 @@ def parse_lesson(doc: Doc, item: Node) -> dict:
             continue
         for field in block.kids:
             fk = field.kids
-            m = FIELD_RE.match(fk[0].kids[0].t.content) if fk and fk[0].kind == "paragraph" else None
+            para = fk[0].kids[0].t if fk and fk[0].kind == "paragraph" else None
+            toks = inline_tokens(para) if para else []
+            m = FIELD_RE.match(lead_text(toks)) if para else None
             if not m:
                 continue                          # a sub-bullet that is not a field: compared, not counted
             key = LABELS[m.group(1)]
@@ -308,9 +353,10 @@ def parse_lesson(doc: Doc, item: Node) -> dict:
             if lesson["seen"][key]:
                 lesson["problems"].append(f"duplicate {key}")
             lesson["seen"][key] = True
-            empty = not fk[0].kids[0].t.content[m.end():].strip(WS) and len(fk) == 1
+            # empty = nothing a reader sees after the label: not in the paragraph, not in a later block
+            empty = not visible_text(toks)[m.end():].strip(WS) and not any(visible(b) for b in fk[1:])
             if key == "source":
-                conf = None if empty else parse_source(fk[0].kids[0].t)
+                conf = None if empty else parse_source(para)
                 if conf is None:
                     lesson["problems"].append("source line is not `[title](https://…) … confidence N%`")
                 elif conf > 100:

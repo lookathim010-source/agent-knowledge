@@ -25,7 +25,7 @@ def _reference_999(state, start: int, end: int, silent: bool) -> bool:
     n_tokens = len(state.tokens)
     if not _reference(state, start, end, silent):
         return False
-    raw =state.src[state.bMarks[start] + state.tShift[start]:state.eMarks[state.line - 1]]
+    raw = state.src[state.bMarks[start] + state.tShift[start]:state.eMarks[state.line - 1]]
     m = re.match(r"\[((?:\\.|[^\\\[\]])*)\]:", raw, re.S)
     if m and len(m.group(1)) > 999:
         state.env["references"] = before

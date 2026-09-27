@@ -3,7 +3,7 @@
 # Each suite copies the repo to a temp dir, applies one mutation per case, and asserts the checker's
 # verdict. Prints one RESULT line per suite and a TOTAL line; exits non-zero if any case fails.
 set -u
-cd "$(dirname "${BASH_SOURCE[0]}")"
+cd "$(dirname "${BASH_SOURCE[0]}")" || exit 1
 total=0; failed=0; suites=0
 for s in neg*.sh; do
   out=$(bash "./$s" 2>&1); rc=$?
