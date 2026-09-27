@@ -23,9 +23,13 @@ has the shape every reader relies on:
 How: Markdown is parsed by markdown-it-py (CommonMark 0.31.2 preset; CI pins it and
 checks it against the reference implementation on all 652 spec examples), so block
 structure is the parser's, not ours. Two copies of a lesson are the same when they
-render to the same HTML once invisible markup (comments, processing instructions,
-declarations, CDATA) is removed and whitespace is collapsed the way a browser does
-outside <pre> and <code>.
+render to the same HTML once markup a browser never displays (comments, processing
+instructions, declarations, CDATA) is removed — found by a browser-faithful HTML
+tokenizer that CI checks against html5lib — and text whitespace is collapsed the way a
+browser does outside <pre> and <code> (not at all when the lesson holds raw HTML that
+shows whitespace as written). Raw HTML can hide what it wraps, so text inside a raw
+HTML element, or a raw HTML block, never counts as a Why / Do / Source value, a source
+link title or a confidence label.
 
 Contract: one line per check (PASS|WARN|FAIL name evidence), final RESULT
 line, exit 0 only when nothing FAILed. `--json` prints one JSON object.
@@ -42,7 +46,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 try:
-    from knowledge_md import MD                       # markdown-it-py, CommonMark preset, conformance-patched
+    from knowledge_md import MD, VOID_TAGS, html_segments   # CommonMark parser + browser-faithful HTML tokenizer
 except Exception as exc:                              # missing, or a release whose internals the patches no longer fit
     _why = ("markdown-it-py is not installed" if isinstance(exc, ImportError) and "markdown_it" in str(exc)
             else f"markdown-it-py failed to load ({type(exc).__name__}: {exc})")
@@ -70,22 +74,16 @@ FIELDS = ("why", "do", "source")
 CONFIDENCE_RE = re.compile(r"(?<![A-Za-z0-9_])confidence ([0-9]{1,3})%(?![0-9%])")   # a standalone label only
 MARKER_RE = re.compile(r"^[ \t]*(?:[-*+]|[0-9]{1,9}[.)])[ \t]*")
 WS = " \t\n\r\f"                                    # HTML/CommonMark whitespace; a NBSP is content
-SEP = "\ufffc"   # stands in for visible non-text inline content (code, image, displayed raw HTML): it splits words
-
-# Raw HTML a browser never displays, ended where a browser's HTML tokenizer ends it (checked in
-# Chromium 141): a comment at `-->` or `--!>` (`<!-->` and `<!--->` are complete, empty comments);
-# a processing instruction, declaration or CDATA section, all "bogus comments" in HTML content, at
-# the first `>`. An unterminated one hides everything to the end.
-INVISIBLE_RE = re.compile(r"<!--(?:-?>|.*?(?:--!?>|\Z))|<[!?][^>]*(?:>|\Z)", re.S)
+SEP = "\ufffc"    # visible non-text content (code, an image): splits words and counts as a value
+SPLIT = "\x00"    # a raw HTML tag, or anything inside a raw HTML element: splits words, never counts as a value
+BLOCK_TAGS = frozenset("address article aside blockquote br dd details dialog div dl dt fieldset figcaption figure "
+                       "footer form h1 h2 h3 h4 h5 h6 header hgroup hr li main nav ol p pre search section summary "
+                       "table tbody td tfoot th thead tr ul".split())      # whitespace next to these is never shown
 # Raw HTML that shows whitespace as written (textarea, xmp, listing, plaintext render as pre /
-# pre-wrap) or can make it so (a style element or attribute): a lesson holding any of it is
-# compared without whitespace normalization.
-WS_KEEP_RE = re.compile(r"<(?:textarea|xmp|listing|plaintext|style)\b|\bstyle\s*=", re.I)
-PROTECT_RE = re.compile(r"<pre\b.*?</pre>|<code\b.*?</code>", re.S | re.I)   # whitespace inside code is content
-BLOCK_TAG_RE = re.compile(
-    r"[ \t\n\r\f]*(</?(?:address|article|aside|blockquote|br|dd|details|dialog|div|dl|dt|fieldset|figcaption|figure|"
-    r"footer|form|h[1-6]|header|hgroup|hr|li|main|nav|ol|p|pre|search|section|summary|table|tbody|td|tfoot|th|thead|"
-    r"tr|ul)\b[^>]*>)[ \t\n\r\f]*", re.I)
+# pre-wrap; checked in Chromium 141) or can make it so (a style element or attribute): a lesson
+# holding any of it is compared without whitespace normalization.
+WS_KEEP_TAGS = frozenset({"textarea", "xmp", "listing", "plaintext", "style"})
+STYLE_ATTR_RE = re.compile(r"[\t\n\f\r \"'/]style[\t\n\f\r ]*=", re.I)
 # Raw-HTML blocks that only end at a terminator (CommonMark types 1-5); the parser also ends them
 # when their container ends, but the OUTPUT then holds unterminated HTML that a browser reads past.
 HTML_ENDS = ((re.compile(r"<(script|pre|style|textarea)(?:[ \t>]|$)", re.I), None),
@@ -201,33 +199,40 @@ def walk(n: Node):
         yield from walk(k)
 
 
-def collapse(s: str) -> str:
-    return BLOCK_TAG_RE.sub(r"\1", re.sub(r"[ \t\n\r\f]+", " ", s))
-
-
 def visible_html(html: str) -> str:
-    """Rendered HTML reduced to what a reader can tell apart: invisible markup removed,
-    whitespace collapsed outside <pre>/<code>, and dropped next to block boundaries."""
-    html = INVISIBLE_RE.sub("", html)
-    if WS_KEEP_RE.search(html):                       # whitespace may be visible anywhere in it: compare exactly
-        return html.strip(WS)
-    parts: list[str] = []
-    i, after_pre = 0, False
-    for m in PROTECT_RE.finditer(html):               # offsets index `html`, so it is never modified here
-        seg = html[i:m.start()]
-        seg = collapse(seg.lstrip(WS) if after_pre else seg)
-        after_pre = m.group(0)[:4].lower() == "<pre"
-        parts.append(seg.rstrip(WS) if after_pre else seg)
-        parts.append(m.group(0))
-        i = m.end()
-    tail = html[i:]
-    parts.append(collapse(tail.lstrip(WS) if after_pre else tail))
-    return "".join(parts).strip(WS)
+    """Rendered HTML reduced to what a reader can tell apart. Markup a browser never displays is
+    removed by a browser-faithful tokenizer (knowledge_md.html_segments), so attribute values and
+    raw text are never touched. Text whitespace is collapsed outside <pre>/<code> and dropped next
+    to block boundaries, unless something in the HTML shows whitespace as written: then only the
+    removal applies."""
+    segs: list[tuple[str, str, str]] = []
+    for seg in html_segments(html):
+        if seg[0] == "text" and segs and segs[-1][0] == "text":
+            segs[-1] = ("text", segs[-1][1] + seg[1], "")    # text that a removed comment split is one text
+        elif seg[0] != "hidden":
+            segs.append(seg)
+    text = [src.replace("<", "&lt;") if kind == "text" else src for kind, src, _ in segs]
+    if any(kind == "start" and (name in WS_KEEP_TAGS or STYLE_ATTR_RE.search(src)) for kind, src, name in segs):
+        return "".join(text).strip(WS)
+    verbatim = 0
+    for k, (kind, src, name) in enumerate(segs):
+        if kind in ("start", "end") and name in ("pre", "code"):
+            verbatim = verbatim + 1 if kind == "start" else max(0, verbatim - 1)
+        if kind != "text" or verbatim:
+            continue
+        t = re.sub(r"[ \t\n\r\f]+", " ", text[k])
+        if k and segs[k - 1][0] in ("start", "end") and segs[k - 1][2] in BLOCK_TAGS:
+            t = t.lstrip(" ")
+        if k + 1 < len(segs) and segs[k + 1][0] in ("start", "end") and segs[k + 1][2] in BLOCK_TAGS:
+            t = t.rstrip(" ")
+        text[k] = t
+    return "".join(text).strip(WS)
 
 
 def visible(n: Node) -> bool:
     """Does this top-level block render anything? Only raw HTML can be invisible."""
-    return n.kind != "html_block" or bool(INVISIBLE_RE.sub("", n.t.content).strip(WS))
+    return n.kind != "html_block" or any(kind != "hidden" and (kind != "text" or src.strip(WS))
+                                         for kind, src, _ in html_segments(n.t.content))
 
 
 def h2s(doc: Doc, n: Node) -> list[str]:
@@ -250,20 +255,31 @@ def inline_tokens(inline) -> list:
 
 def invisible_inline(c) -> bool:
     """An inline raw-HTML token a browser never displays (a comment, PI, declaration, CDATA)."""
-    return c.type == "html_inline" and not INVISIBLE_RE.sub("", c.content).strip(WS)
+    return c.type == "html_inline" and all(kind == "hidden" for kind, _, _ in html_segments(c.content))
 
 
 def visible_text(tokens) -> str:
-    """The text a reader sees in a run of inline tokens. Formatting delimiters (emphasis, link
-    brackets) and invisible raw HTML are zero-width; line breaks read as a space; other visible
-    content (code, an image, raw HTML that displays) becomes SEP, so it splits the words around it."""
-    out = []
+    """The text a reader is sure to see in a run of inline tokens. Formatting delimiters and
+    never-displayed markup are zero-width; line breaks read as a space; code and images become SEP.
+    A raw HTML tag, and everything inside a raw HTML element (it may be `hidden`, a template, or
+    styled away), becomes SPLIT: it splits words but never counts as a value."""
+    out, depth = [], 0
     for c in tokens:
-        if c.type == "text":
+        if c.type == "html_inline":
+            for kind, _, name in html_segments(c.content):
+                if kind == "start" and name not in VOID_TAGS:
+                    depth += 1
+                elif kind == "end":
+                    depth = max(0, depth - 1)
+                if kind != "hidden":
+                    out.append(SPLIT)
+        elif depth:
+            out.append(SPLIT)
+        elif c.type == "text":
             out.append(c.content)
         elif c.type in ("softbreak", "hardbreak"):
             out.append(" ")
-        elif c.type in ("code_inline", "image") or (c.type == "html_inline" and not invisible_inline(c)):
+        elif c.type in ("code_inline", "image"):
             out.append(SEP)
     return "".join(out)
 
@@ -296,7 +312,7 @@ def parse_source(inline) -> int | None:
     if not re.match(r"https?://[^ \t]+$", toks[k].attrGet("href") or ""):
         return None
     close = next((j for j in range(k + 1, len(toks)) if toks[j].type == "link_close"), None)
-    if close is None or not visible_text(toks[k + 1:close]).strip(WS):   # the link needs a visible title
+    if close is None or not visible_text(toks[k + 1:close]).replace(SPLIT, "").strip(WS):   # needs a visible title
         return None
     m = CONFIDENCE_RE.search(visible_text(toks[close + 1:]))
     return int(m.group(1)) if m else None
@@ -306,7 +322,7 @@ def title_of(inline) -> tuple[str | None, bool]:
     """(title, continues) when the paragraph opens with ONE `**strong**` span holding no other
     strong span — `continues` when the paragraph goes on past it on later lines. (None, _)
     when it is not a bold lesson title at all."""
-    ch = inline_tokens(inline)
+    ch = [c for c in inline_tokens(inline) if not invisible_inline(c)]
     if not ch or ch[0].type != "strong_open" or ch[0].markup != "**":
         return None, False
     depth, end = 0, None
@@ -360,8 +376,10 @@ def parse_lesson(doc: Doc, item: Node) -> dict:
             if lesson["seen"][key]:
                 lesson["problems"].append(f"duplicate {key}")
             lesson["seen"][key] = True
-            # empty = nothing a reader sees after the label: not in the paragraph, not in a later block
-            empty = not visible_text(toks)[m.end():].strip(WS) and not any(visible(b) for b in fk[1:])
+            # empty = nothing a reader is sure to see after the label: not in the paragraph, and no
+            # later Markdown block (raw HTML never counts as a value — it may be hidden)
+            empty = (not visible_text(toks)[m.end():].replace(SPLIT, "").strip(WS)
+                     and not any(b.kind != "html_block" for b in fk[1:]))
             if key == "source":
                 conf = None if empty else parse_source(para)
                 if conf is None:

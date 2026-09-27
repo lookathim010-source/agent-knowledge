@@ -31,8 +31,8 @@ counters) lives in Cloudflare KV, not here.
 | `verified/YYYY-MM-DD_topic_vN.md` | Fact sheets verified live in a Claude session, not daily.dev lessons. Revisions bump `vN` | Claude sessions, hand-maintained |
 | `harness/check-knowledge.py` | PASS/FAIL check that the files above still have the shape readers rely on | Run by CI and by sessions |
 | `harness/knowledge_md.py` | The one Markdown parser the checks use: markdown-it-py (CommonMark 0.31.2) plus the patches that align it with the reference | Sessions |
-| `harness/tests/` | 238 negative-test cases: each copies the repo, breaks one thing, and asserts the checker's verdict | Sessions |
-| `harness/conformance/` | Differential gate: the parser must render all 652 CommonMark spec examples and 50 edge cases like the reference implementation | Sessions |
+| `harness/tests/` | 253 negative-test cases: each copies the repo, breaks one thing, and asserts the checker's verdict | Sessions |
+| `harness/conformance/` | Differential gates: the parser must render all 652 CommonMark spec examples and 56 edge cases like the reference implementation, and the HTML tokenizer must split HTML like html5lib | Sessions |
 | `LEDGER.md` | One row per hand-made or session-made change (connector runs are not logged here) | Sessions and hand edits |
 
 ## How a lesson is shaped
@@ -64,14 +64,18 @@ Zero lessons on a quiet day is a valid result; the loop is told never to pad.
 pip install -r harness/requirements.txt     # markdown-it-py, pinned
 python3 harness/check-knowledge.py          # PASS/FAIL lines
 python3 harness/check-knowledge.py --json   # same, as one JSON object
-bash harness/tests/run.sh                   # the 238 negative-test cases
+bash harness/tests/run.sh                   # the 253 negative-test cases
 ```
 
 The checker reads Markdown the way CommonMark 0.31.2 does, using a real parser
 rather than pattern matching. Two copies of a lesson count as the same when they
-render to the same visible HTML. CI runs the checker, the test suites,
-markdownlint and a conformance gate against the reference implementation on
-every pull request and every push to `main` (`.github/workflows/lint.yml`).
+render to the same visible HTML. Raw HTML can hide what it wraps, so a Why, Do
+or Source value (or a confidence label) has to be Markdown text, code or an
+image, never text inside raw HTML. CI runs the checker, the test suites,
+markdownlint, shellcheck, pyflakes and two conformance gates (the Markdown
+parser against the reference implementation, the HTML tokenizer against
+html5lib) on every pull request and every push to `main`
+(`.github/workflows/lint.yml`).
 GitHub itself renders with an older spec (cmark-gfm, 0.29): in rare edge cases,
 such as a lowercase `<!foo>` line, GitHub shows text where 0.31.2 hides a
 declaration.

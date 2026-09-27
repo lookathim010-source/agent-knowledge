@@ -10,10 +10,12 @@ containing a given string, `pos` expects PASS, and `stray_only` expects a
 that prints `MUTATION DID NOT APPLY`, so no case can pass on an unchanged repo.
 
 The suite numbers follow the review rounds that produced them (rounds 11 to
-27 of the review on PR #1, rounds 28 and 29 on PR #2). Cases marked
+27 of the review on PR #1, rounds 28 to 30 on PR #2). Cases marked
 `CORRECTED 2026-09-27` encoded a CommonMark reading that the reference
 implementation (commonmark.js 0.31.2) proved wrong. Each correction keeps a
-replacement case for the intent that survives.
+replacement case for the intent that survives. Round 30 made raw HTML stricter:
+text inside it no longer counts as a field value, so round-29 cases put plain
+text beside their raw HTML.
 
 ```bash
 pip install -r harness/requirements.txt

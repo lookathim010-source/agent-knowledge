@@ -248,5 +248,35 @@
   "id": "whitespace-link-label",
   "markdown": "[ ](https://x.y)\n",
   "why": "a whitespace-only link text is still a link"
+ },
+ {
+  "id": "comment-before-title",
+  "markdown": "- <!-- note -->**Commented title**\n  - Why it matters here: x\n",
+  "why": "item content starting with `<!--` is an HTML block: the title is raw text"
+ },
+ {
+  "id": "comment-after-title",
+  "markdown": "- **Commented title**<!-- c -->\n  - Why it matters here: x\n",
+  "why": "an inline comment after the bold title stays inline"
+ },
+ {
+  "id": "hidden-span-confidence",
+  "markdown": "Source: [T](https://x.y) — A <span hidden>confidence 80%</span>\n",
+  "why": "raw inline tags around the confidence label"
+ },
+ {
+  "id": "comment-in-attribute",
+  "markdown": "Do: <input value=\"<!-- A -->\">\n",
+  "why": "a double-quoted attribute value may hold comment-like text"
+ },
+ {
+  "id": "block-tag-in-attribute",
+  "markdown": "Do: <abbr title=\"a <p> b\">y</abbr>\n",
+  "why": "a double-quoted attribute value may hold tag-like text"
+ },
+ {
+  "id": "raw-div-field-value",
+  "markdown": "- Why it matters here:\n\n  <div hidden>x</div>\n",
+  "why": "a type-6 HTML block as a field's only content"
  }
 ]

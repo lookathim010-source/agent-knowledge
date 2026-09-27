@@ -66,7 +66,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: pip install -r harness/requirements.txt
+      - run: pip install -r harness/requirements.txt html5lib==1.1
+      # The HTML tokenizer the checker uses to find never-displayed markup, against html5lib (WHATWG).
+      - run: python3 harness/conformance/html_oracle.py
       # The reference implementation and the official spec examples, pinned to CommonMark 0.31.2.
       - run: npm install --no-save --no-audit --no-fund --prefix "$RUNNER_TEMP/ref" commonmark@0.31.2 commonmark-spec@0.31.2
       - run: node harness/conformance/reference.cjs "$RUNNER_TEMP/ref/node_modules" > "$RUNNER_TEMP/ref.json"

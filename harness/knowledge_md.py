@@ -1,9 +1,13 @@
-"""knowledge_md.py — the one Markdown parser every harness script uses.
+"""knowledge_md.py — the one Markdown parser and HTML tokenizer every harness script uses.
 
 markdown-it-py with the CommonMark preset, plus the patches that close the gaps between it and
 the CommonMark 0.31.2 reference implementation (commonmark.js) that this repo's checks depend
 on. harness/conformance/check.py proves the combination against the reference on all 652 spec
 examples and on cases.json; a new markdown-it-py release that drifts fails CI there first.
+
+html_segments() splits rendered HTML the way a browser's tokenizer does, so the checker can
+drop only what a browser never displays. harness/conformance/html_oracle.py checks it against
+html5lib (a WHATWG-conformant tokenizer) on a fixed corpus and on seeded fuzz.
 """
 from __future__ import annotations
 
@@ -50,3 +54,102 @@ def _patch_html_blocks() -> None:
 _patch_html_blocks()
 MD = MarkdownIt("commonmark")
 MD.block.ruler.at("reference", _reference_999)
+
+
+# --- raw HTML, tokenized the way a browser does ----------------------------------------------
+HTML_WS = "\t\n\f\r "
+RAWTEXT_TAGS = frozenset({"script", "style", "textarea", "title", "xmp", "iframe", "noembed", "noframes",
+                          "noscript"})                      # content is text to the matching end tag
+VOID_TAGS = frozenset({"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source",
+                       "track", "wbr"})                     # never have content, `/>` or not
+_NAME_RE = re.compile(r"</?([A-Za-z][^\t\n\f\r />]*)")
+_COMMENT_RE = re.compile(r"<!--(?:-?>|.*?(?:--!?>|\Z))", re.S)   # `<!-->`, `<!--->` are complete; `--!>` ends one too
+
+
+def _tag_end(s: str, i: int) -> int:
+    """Index just past the tag starting at s[i] (WHATWG attribute states: a quote only opens a
+    value right after `=`, and `>` anywhere else ends the tag), or -1 when it never ends."""
+    j, n, state = _NAME_RE.match(s, i).end(), len(s), "before"
+    while j < n:
+        c = s[j]
+        if state == "value":                                 # right after `=`
+            if c in HTML_WS:
+                j += 1
+                continue
+            if c in "\"'":
+                k = s.find(c, j + 1)
+                if k < 0:
+                    return -1
+                j, state = k + 1, "before"
+                continue
+            state = "unquoted"
+        if c == ">":
+            return j + 1
+        if state == "unquoted":
+            state = "before" if c in HTML_WS else "unquoted"
+        elif c == "=" and state in ("name", "after"):
+            state = "value"
+        elif c in HTML_WS:
+            state = "after" if state == "name" else state
+        elif c == "/":
+            state = "before"
+        else:
+            state = "name"                                   # a new attribute name (a leading `=` included)
+        j += 1
+    return -1
+
+
+def html_segments(html: str) -> list[tuple[str, str, str]]:
+    """[(kind, source, tag name)] with kind "text", "start", "end", "raw" (a raw-text element's
+    content, or CDATA once svg/math appears) or "hidden" (a comment, PI, declaration, CDATA or
+    `</>`: a browser never displays it). A tag cut off by the end of the input is kept, because in a
+    fragment the browser would read on into whatever follows."""
+    out: list[tuple[str, str, str]] = []
+    i, n, foreign = 0, len(html), False
+    while i < n:
+        j = html.find("<", i)
+        if j < 0:
+            out.append(("text", html[i:], ""))
+            break
+        if j > i:
+            out.append(("text", html[i:j], ""))
+        nm = _NAME_RE.match(html, j)
+        if html.startswith("<!--", j):
+            k = _COMMENT_RE.match(html, j).end()
+            out.append(("hidden", html[j:k], ""))
+        elif nm:
+            k, name = _tag_end(html, j), nm.group(1).lower()
+            k = n if k < 0 else k
+            end = html[j + 1] == "/"
+            out.append(("end" if end else "start", html[j:k], name))
+            foreign = foreign or (not end and name in ("svg", "math"))
+            if not end and (name in RAWTEXT_TAGS or name == "plaintext"):
+                close = None if name == "plaintext" else re.compile(
+                    r"</" + re.escape(name) + r"[\t\n\f\r />]", re.I).search(html, k)
+                stop = close.start() if close else n
+                if stop > k:
+                    out.append(("raw", html[k:stop], name))
+                k = stop
+        elif foreign and html.startswith("<![CDATA[", j):   # real CDATA in svg/math: kept verbatim
+            e = html.find("]]>", j)
+            k = n if e < 0 else e + 3
+            out.append(("raw", html[j:k], ""))
+        elif html.startswith("</>", j):
+            k = j + 3
+            out.append(("hidden", "</>", ""))
+        elif html[j + 1:j + 2] in ("!", "?") or (html[j + 1:j + 2] == "/" and j + 2 < n):
+            e = html.find(">", j)                            # a bogus comment: ends at the first `>`
+            k = n if e < 0 else e + 1
+            out.append(("hidden", html[j:k], ""))
+        else:
+            k = j + (2 if html.startswith("</", j) else 1)   # a lone `<`, or `</` at the very end
+            out.append(("text", html[j:k], ""))
+        i = k
+    return out
+
+
+def strip_hidden(html: str) -> str:
+    """The HTML without what a browser never displays, a literal `<` in text written as `&lt;`
+    so that removing a comment can never splice two pieces into a new tag."""
+    return "".join(src.replace("<", "&lt;") if kind == "text" else src
+                   for kind, src, _ in html_segments(html) if kind != "hidden")

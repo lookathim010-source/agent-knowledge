@@ -30,17 +30,18 @@ open(p,"w").write("\n".join(s))
 '
 F='"  - Source: [T](https://x.y) — A · confidence 50%"'
 
-# N1 (4117161110): raw HTML that keeps whitespace visible (textarea, xmp, listing, a white-space style) is compared exactly
-t1() { split 'LESSON=["- **Textarea**","  - Why it matters here: x","  - Do: <textarea>a  b</textarea>",'"$F"']'"$INS" \
-             'LESSON=["- **Textarea**","  - Why it matters here: x","  - Do: <textarea>a   b</textarea>",'"$F"']'"$INS"; }
+# N1 (4117161110): raw HTML that keeps whitespace visible (textarea, xmp, listing, a white-space style) is compared exactly.
+#    (Each Do: carries plain text beside the raw HTML: since round 30, content inside raw HTML never counts as a value.)
+t1() { split 'LESSON=["- **Textarea**","  - Why it matters here: x","  - Do: type <textarea>a  b</textarea>",'"$F"']'"$INS" \
+             'LESSON=["- **Textarea**","  - Why it matters here: x","  - Do: type <textarea>a   b</textarea>",'"$F"']'"$INS"; }
 run "N1 textarea-whitespace-is-visible" "same title, different content" t1
-t1b() { split 'LESSON=["- **Styled**","  - Why it matters here: x","  - Do: <span style=\"white-space:pre\">a  b</span>",'"$F"']'"$INS" \
-              'LESSON=["- **Styled**","  - Why it matters here: x","  - Do: <span style=\"white-space:pre\">a b</span>",'"$F"']'"$INS"; }
+t1b() { split 'LESSON=["- **Styled**","  - Why it matters here: x","  - Do: type <span style=\"white-space:pre\">a  b</span>",'"$F"']'"$INS" \
+              'LESSON=["- **Styled**","  - Why it matters here: x","  - Do: type <span style=\"white-space:pre\">a b</span>",'"$F"']'"$INS"; }
 run "N1+ white-space-style-is-visible" "same title, different content" t1b
 t1c() { split 'LESSON=["- **Block textarea**","  - Why it matters here: x","  - Do: y","","    <textarea>","    a  b","    </textarea>","",'"$F"']'"$INS" \
               'LESSON=["- **Block textarea**","  - Why it matters here: x","  - Do: y","","    <textarea>","    a   b","    </textarea>","",'"$F"']'"$INS"; }
 run "N1++ textarea-block-whitespace-is-visible" "same title, different content" t1c
-t1d() { both 'LESSON=["- **Textarea**","  - Why it matters here: x","  - Do: <textarea>a  b</textarea>",'"$F"']'"$INS"; }
+t1d() { both 'LESSON=["- **Textarea**","  - Why it matters here: x","  - Do: type <textarea>a  b</textarea>",'"$F"']'"$INS"; }
 pos "N1+++ identical-textarea-copies-pass" t1d
 
 # N3 (4117161124): a source link needs visible link text
