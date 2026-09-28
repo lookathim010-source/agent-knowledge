@@ -31,8 +31,8 @@ counters) lives in Cloudflare KV, not here.
 | `verified/YYYY-MM-DD_topic_vN.md` | Fact sheets verified live in a Claude session, not daily.dev lessons. Revisions bump `vN` | Claude sessions, hand-maintained |
 | `harness/check-knowledge.py` | PASS/FAIL check that the files above still have the shape readers rely on | Run by CI and by sessions |
 | `harness/knowledge_md.py` | The one Markdown parser the checks use: markdown-it-py (CommonMark 0.31.2) plus the patches that align it with the reference | Sessions |
-| `harness/tests/` | 312 negative-test cases: each copies the repo, breaks one thing, and asserts the checker's verdict | Sessions |
-| `harness/conformance/` | Differential gates: the parser must render all 652 CommonMark spec examples and 69 edge cases like the reference implementation, and the HTML tokenizer must split HTML like html5lib | Sessions |
+| `harness/tests/` | 316 negative-test cases: each copies the repo, breaks one thing, and asserts the checker's verdict | Sessions |
+| `harness/conformance/` | Differential gates: the parser must render all 652 CommonMark spec examples and 71 edge cases like the reference implementation, and the HTML tokenizer must split HTML like html5lib | Sessions |
 | `LEDGER.md` | One row per hand-made or session-made change (connector runs are not logged here) | Sessions and hand edits |
 
 ## How a lesson is shaped
@@ -64,7 +64,7 @@ Zero lessons on a quiet day is a valid result; the loop is told never to pad.
 pip install -r harness/requirements.txt     # markdown-it-py, pinned
 python3 harness/check-knowledge.py          # PASS/FAIL lines
 python3 harness/check-knowledge.py --json   # same, as one JSON object
-bash harness/tests/run.sh                   # the 312 negative-test cases
+bash harness/tests/run.sh                   # the 316 negative-test cases
 ```
 
 The checker reads Markdown the way CommonMark 0.31.2 does, using a real parser

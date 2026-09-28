@@ -20,9 +20,10 @@ import re  # noqa: E402
 # never inside <pre>, where a newline is visible; every other byte must match.
 BLOCK_NL = re.compile(r"\n(?=</?(?:blockquote|ul|ol|li|p|h[1-6]|hr|div|table)[\s/>])|\n(?=<pre[\s>])|\n(?=<!--)")
 PRE = re.compile(r"<pre[\s>].*?(?=</pre>)", re.S | re.I)   # a newline inside <pre> is visible: never canonicalized
-# Reviewed cases where the REFERENCE departs from the spec text; we follow the spec. Each entry
-# pins OUR exact output (cmark-gfm 0.29.0.gfm.13's output, checked 2026-09-27) and must still differ
-# from the reference, so an entry can neither hide a regression nor outlive its reason.
+# Reviewed divergences: where the REFERENCE departs from the spec text (we follow the spec, and
+# cmark-gfm 0.29.0.gfm.13, checked 2026-09-27), or where the spec leaves rendering open. Each entry
+# pins OUR exact output and must still differ from the reference, so an entry can neither hide a
+# regression nor outlive its reason.
 ALLOWED = {
     "nbsp-after-tag": ("commonmark.js matches HTML-block starts with JS `\\s`, which includes U+00A0; spec 0.31.2 "
                        "section 4.6 allows only space, tab, end of line, `>` or `/>` after the tag name, and 6.6 "
@@ -30,6 +31,11 @@ ALLOWED = {
                        "<p>&lt;div\xa0class=x&gt;\ntext</p>\n"),
     "type7-nbsp": ("same root cause: an attribute must be preceded by space, tab or a line ending (spec 6.6); "
                    "cmark and cmark-gfm render the tag as text.", "<p>&lt;span\xa0a=b&gt;</p>\n"),
+    "html-in-image-description": ("the spec only recommends the description's plain string content for `alt` "
+                                  "(6.4) and implementations differ: commonmark.js writes `<b>x</b>` raw, cmark-gfm "
+                                  "escapes it, markdown-it keeps the text `x`. Raw HTML is banned in lessons, so no "
+                                  "verdict depends on it; the parse (an image) is the same.",
+                                  '<p>Do: <img src="https://x.y/i.png" alt="x" /> y</p>\n'),
     "nbsp-in-inline-tag": ("same root cause inline: commonmark.js takes `<span` + U+00A0 + `a=b>` as raw HTML; spec 6.6 and "
                            "cmark-gfm make it text.", "<p>x &lt;span\xa0a=b&gt; y</p>\n"),
 }

@@ -343,5 +343,15 @@
   "id": "vt-after-block-tag",
   "markdown": "<div\u000bx>\ntext\n",
   "why": "a form feed or vertical tab separates tag parts (cmark spacechar, commonmark.js \\s); only a NBSP does not"
+ },
+ {
+  "id": "comment-block-then-field",
+  "markdown": "- **T**\n  - <!-- note -->\n    Why it matters here: x\n",
+  "why": "a comment alone on a field item's first line ends its HTML block; the label paragraph follows"
+ },
+ {
+  "id": "html-in-image-description",
+  "markdown": "Do: ![<b>x</b>](https://x.y/i.png) y\n",
+  "why": "raw HTML inside an image description is dropped from the alt text"
  }
 ]

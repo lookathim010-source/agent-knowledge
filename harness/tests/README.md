@@ -10,7 +10,7 @@ containing a given string, `pos` expects PASS, and `stray_only` expects a
 that prints `MUTATION DID NOT APPLY`, so no case can pass on an unchanged repo.
 
 The suite numbers follow the review rounds that produced them (rounds 11 to
-27 of the review on PR #1, rounds 28 to 35 on PR #2). Cases marked
+27 of the review on PR #1, rounds 28 to 36 on PR #2). Cases marked
 `CORRECTED 2026-09-27` encoded a CommonMark reading that the reference
 implementation (commonmark.js 0.31.2) proved wrong. Each correction keeps a
 replacement case for the intent that survives. Round 30 made raw HTML stricter:

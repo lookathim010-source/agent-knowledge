@@ -403,10 +403,14 @@ def raw_html_in(doc: Doc, n: Node) -> bool:
     def only_comments(html: str) -> bool:
         return all((kind == "hidden" and src.startswith("<!--")) or (kind == "text" and not src.strip(WS))  # blank
                    for kind, src, _ in html_segments(html))                 # text: the padding of a comment block
+    def walk(tokens):                                      # image descriptions nest their own tokens
+        for c in tokens or []:
+            yield c
+            yield from walk(c.children)
     for t in doc.tokens[n.i:n.j + 1]:
         if t.type == "html_block" and not only_comments(t.content):
             return True
-        if t.type == "inline" and any(c.type == "html_inline" and not only_comments(c.content) for c in t.children):
+        if t.type == "inline" and any(c.type == "html_inline" and not only_comments(c.content) for c in walk(t.children)):
             return True
     return False
 
@@ -433,7 +437,7 @@ def parse_lesson(doc: Doc, item: Node) -> dict:
         if block.kind != "bullet_list" or block.t.markup != "-":
             continue
         for field in block.kids:
-            fk = field.kids
+            fk = [k for k in field.kids if visible(k)]   # a comment-only block before the label is invisible
             para = fk[0].kids[0].t if fk and fk[0].kind == "paragraph" else None
             toks = inline_tokens(para) if para else []
             m = FIELD_RE.match(lead_text(toks)) if para else None
