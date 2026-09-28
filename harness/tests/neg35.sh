@@ -28,7 +28,7 @@ if python3 - "$SRC/harness/conformance/check.py" <<'PY'
 import re, sys
 src = open(sys.argv[1]).read()
 ns = {"re": re}
-exec(src[src.index("BLOCK_NL = "):src.index("# Reviewed cases")], ns)
+exec(src[src.index("BLOCK_NL = "):src.index("ALLOWED = {")], ns)   # code anchors, not comments
 exec(src[src.index("def canon"):src.index("ref = json.load")], ns)
 c = ns["canon"]
 assert c("<PRE>x\n<!-- c --></PRE>") != c("<PRE>x<!-- c --></PRE>")
