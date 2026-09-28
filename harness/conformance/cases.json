@@ -308,5 +308,15 @@
   "id": "undefined-reference-is-text",
   "markdown": "Source: [Title][src] — A · confidence 80%\n",
   "why": "without its definition a reference link is plain text (how the checker re-reads a Source line)"
+ },
+ {
+  "id": "nbsp-in-inline-tag",
+  "markdown": "x <span a=b> y\n",
+  "why": "a NBSP before an attribute does not make an inline raw tag"
+ },
+ {
+  "id": "comment-block-then-title",
+  "markdown": "- <!-- note -->\n  **Own-line comment**\n  - Why it matters here: x\n",
+  "why": "a comment alone on the item's first line ends its HTML block; the next line is a Markdown paragraph"
  }
 ]

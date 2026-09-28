@@ -351,7 +351,7 @@ def parse_source(inline) -> int | None:
     close = next((j for j in range(k + 1, len(toks)) if toks[j].type == "link_close"), None)
     if close is None or not visible_text(toks[k + 1:close]).replace(SPLIT, "").strip(WS):   # needs a visible title
         return None
-    tail = visible_text(toks[k + 1:close])[-1:] + visible_text(toks[close + 1:])   # the link text's last character
+    tail = visible_text(toks[k + 1:close], code_text=True)[-1:] + visible_text(toks[close + 1:])   # link text's last char
     m = CONFIDENCE_RE.search(tail, 1)                                              # takes part in the word boundary
     return int(m.group(1)) if m else None
 
@@ -413,7 +413,8 @@ def parse_lesson(doc: Doc, item: Node) -> dict:
     lesson = {"problems": [], "key": doc.html(item), "parts": {}, "seen": {k: False for k in FIELDS}}
     if raw_html_in(doc, item):
         lesson["problems"].append("raw HTML in a lesson (only <!-- comments --> are allowed)")
-    head = item.kids[0] if item.kids and item.kids[0].kind == "paragraph" else None
+    kids = [k for k in item.kids if visible(k)]            # a comment-only block before the title is invisible
+    head = kids[0] if kids and kids[0].kind == "paragraph" else None
     title, continues = title_of(head.kids[0].t) if head and item.t.markup == "-" else (None, False)
     if title is None:
         raw = MARKER_RE.sub("", doc.line(item), count=1).strip(WS)
@@ -425,7 +426,7 @@ def parse_lesson(doc: Doc, item: Node) -> dict:
     if continues:
         lesson["problems"].append("title paragraph continues past the bold span")
     order: list[str] = []
-    for block in item.kids[1:]:
+    for block in kids[1:]:
         if block.kind != "bullet_list" or block.t.markup != "-":
             continue
         for field in block.kids:
@@ -665,7 +666,7 @@ else:
             continue
         vdoc = Doc(text)
         head = next((n for n in vdoc.top if visible(n)), None)
-        heading_text = ("".join(c.content for c in head.kids[0].t.children if c.type in ("text", "code_inline"))
+        heading_text = (visible_text(inline_tokens(head.kids[0].t), code_text=True).replace(SPLIT, "").replace(SEP, "")
                         if head and head.kind == "heading" and head.t.tag == "h1" and head.t.markup == "#" else "")
         if not heading_text.strip(WS):
             noh1.append(p.name)

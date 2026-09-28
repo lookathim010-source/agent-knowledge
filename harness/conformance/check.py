@@ -19,14 +19,18 @@ import re  # noqa: E402
 # `<blockquote>\n</blockquote>`). Both sides are compared with exactly that newline removed;
 # every other byte must match.
 BLOCK_NL = re.compile(r"\n(?=</?(?:blockquote|pre|ul|ol|li|p|h[1-6]|hr|div|table)[\s/>])|\n(?=<!--)")
-# Reviewed cases where the REFERENCE departs from the spec text; we follow the spec. Each must
-# still diverge (a stale entry fails the gate), so the list cannot silently outlive its reason.
+# Reviewed cases where the REFERENCE departs from the spec text; we follow the spec. Each entry
+# pins OUR exact output (cmark-gfm 0.29.0.gfm.13's output, checked 2026-09-27) and must still differ
+# from the reference, so an entry can neither hide a regression nor outlive its reason.
 ALLOWED = {
-    "nbsp-after-tag": "commonmark.js matches HTML-block starts with JS `\\s`, which includes U+00A0; spec 0.31.2 "
-                      "section 4.6 allows only space, tab, end of line, `>` or `/>` after the tag name. cmark and "
-                      "cmark-gfm (GitHub) follow the spec: paragraph.",
-    "type7-nbsp": "same root cause: an attribute must be preceded by space, tab or a line ending (spec 6.6); "
-                  "cmark and cmark-gfm render a paragraph.",
+    "nbsp-after-tag": ("commonmark.js matches HTML-block starts with JS `\\s`, which includes U+00A0; spec 0.31.2 "
+                       "section 4.6 allows only space, tab, end of line, `>` or `/>` after the tag name, and 6.6 "
+                       "only spaces, tabs and a line ending inside a tag. cmark and cmark-gfm (GitHub): text.",
+                       "<p>&lt;div\xa0class=x&gt;\ntext</p>\n"),
+    "type7-nbsp": ("same root cause: an attribute must be preceded by space, tab or a line ending (spec 6.6); "
+                   "cmark and cmark-gfm render the tag as text.", "<p>&lt;span\xa0a=b&gt;</p>\n"),
+    "nbsp-in-inline-tag": ("same root cause inline: commonmark.js takes `<span` + U+00A0 + `a=b>` as raw HTML; spec 6.6 and "
+                           "cmark-gfm make it text.", "<p>x &lt;span\xa0a=b&gt; y</p>\n"),
 }
 
 
@@ -37,7 +41,10 @@ ref = json.load(open(sys.argv[1], encoding="utf-8"))
 bad, allowed_hit = [], []
 for group in ("spec", "cases"):
     for ex in ref[group]:
-        if canon(MD.render(ex["markdown"])) != canon(ex["html"]):
+        ours = canon(MD.render(ex["markdown"]))
+        if ex["id"] in ALLOWED and ours != canon(ALLOWED[ex["id"]][1]):
+            bad.append(ex["id"])                           # an exception must render exactly as pinned
+        elif ours != canon(ex["html"]):
             (allowed_hit if ex["id"] in ALLOWED else bad).append(ex["id"])
 n_spec, n_cases = len(ref["spec"]), len(ref["cases"])
 def differing(group_is_spec: bool) -> int:
@@ -49,9 +56,9 @@ print(f"{'PASS' if not bad else 'FAIL'} conformance:spec+cases   {n_spec - diffe
 for b in bad:
     ex = next(e for g in ("spec", "cases") for e in ref[g] if e["id"] == b)
     print(f"  DIVERGES {b}: {ex.get('why', ex.get('section'))}\n    input {ex['markdown']!r}\n    ref   {ex['html']!r}\n    ours  {MD.render(ex['markdown'])!r}")
-stale = sorted(set(ALLOWED) - set(allowed_hit))
+stale = sorted(set(ALLOWED) - set(allowed_hit) - set(bad))   # a mis-pinned entry is reported above
 for a in sorted(allowed_hit):
-    print(f"  allowed {a}: {ALLOWED[a]}")
+    print(f"  allowed {a}: {ALLOWED[a][0]}")
 if stale:
     print(f"FAIL conformance:allowlist      allowed divergence(s) no longer diverge — remove them: {stale}")
 print("----")

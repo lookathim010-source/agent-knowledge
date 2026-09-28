@@ -14,7 +14,9 @@ from __future__ import annotations
 import re
 import sys
 
+import markdown_it.common.html_re  # noqa: F401  (the inline tag pattern rebuilt below)
 import markdown_it.rules_block  # noqa: F401  (loads the html_block module patched below)
+import markdown_it.rules_inline.html_inline  # noqa: F401  (whose tag pattern is replaced below)
 from markdown_it import MarkdownIt
 from markdown_it.rules_block.reference import reference as _reference
 
@@ -51,7 +53,23 @@ def _patch_html_blocks() -> None:
         seqs[k] = (re.compile(pattern, start.flags), end, can_interrupt)
 
 
+def _patch_html_inline() -> None:
+    """markdown-it-py 4.0.0 lets Python's `\\s` (which matches a NBSP) separate a raw inline tag's
+    name, attributes and `=`; CommonMark 0.31.2 allows only spaces, tabs and a line ending, so
+    `<span\\xa0a=b>` is literal text (cmark and cmark-gfm agree). Rebuild the inline tag pattern
+    with that whitespace; comments, PIs, declarations and CDATA are unchanged. Pinned by cases.json
+    (nbsp-in-inline-tag)."""
+    h = sys.modules["markdown_it.common.html_re"]
+    ws = "[ \\t\\n]"
+    attribute = "(?:" + ws + "+" + h.attr_name + "(?:" + ws + "*=" + ws + "*" + h.attr_value + ")?)"
+    open_tag = "<[A-Za-z][A-Za-z0-9\\-]*" + attribute + "*" + ws + "*\\/?>"
+    close_tag = "<\\/[A-Za-z][A-Za-z0-9\\-]*" + ws + "*>"
+    sys.modules["markdown_it.rules_inline.html_inline"].HTML_TAG_RE = re.compile(
+        "^(?:" + "|".join((open_tag, close_tag, h.comment, h.processing, h.declaration, h.cdata)) + ")")
+
+
 _patch_html_blocks()
+_patch_html_inline()
 MD = MarkdownIt("commonmark")
 MD.block.ruler.at("reference", _reference_999)
 
