@@ -332,8 +332,10 @@ def lead_text(tokens) -> str:
 
 def parse_source(inline) -> int | None:
     """Confidence N for a Source field rendering as `Source: <link to http(s)> … confidence N%`,
-    else None. Only visible text after the link counts — never link text, code or HTML attributes."""
-    toks = [c for c in inline_tokens(inline) if not invisible_inline(c)]
+    else None. Only visible text after the link counts — never link text, code or HTML attributes.
+    The link must be written inline, `[title](https://…)`: the paragraph is re-read without the
+    file's reference definitions, so a `[title][ref]` link does not count."""
+    toks = [c for c in inline_tokens(MD.parseInline(inline.content, {})[0]) if not invisible_inline(c)]
     k, lead = 0, ""
     while k < len(toks) and toks[k].type == "text":
         lead += toks[k].content

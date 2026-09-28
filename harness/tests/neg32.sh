@@ -74,6 +74,14 @@ t6() { split 'LESSON=["- **Char ref**","  - Why it matters here: x","  - Do: <in
              'LESSON=["- **Char ref**","  - Why it matters here: x","  - Do: <input value=\"&#65;\">",'"$F"']'"$INS"; }
 run "R6 character-reference-in-attribute" "$R" t6
 
+# R8 (4117888333): the source link must be inline `[title](https://…)` — a reference-style link does not count
+t8() { both 'LESSON=["- **Ref source**","  - Why it matters here: x","  - Do: y","  - Source: [Title][src] — A · confidence 80%","","[src]: https://x.y"]'"$INS"; }
+run "R8 full-reference-source-link" "source line is not" t8
+t8b() { both 'LESSON=["- **Shortcut source**","  - Why it matters here: x","  - Do: y","  - Source: [src] — A · confidence 80%","","[src]: https://x.y"]'"$INS"; }
+run "R8+ shortcut-reference-source-link" "source line is not" t8b
+t8c() { both 'LESSON=["- **Ref in why**","  - Why it matters here: see [docs][src]","  - Do: y",'"$F"',"","[src]: https://x.y"]'"$INS"; }
+pos "R8++ reference-links-elsewhere-still-fine" t8c
+
 # R7 (4117489584): `</svg/>` is an end tag; the tokenizer leaves foreign content (CDATA is a bogus comment again)
 n=$((n+1))
 if python3 - "$SRC/harness" <<'PY'
