@@ -320,7 +320,9 @@ def visible_text(tokens, code_text: bool = False) -> str:
 
 
 def lead_text(tokens) -> str:
-    """The paragraph's leading plain text (invisible raw HTML skipped): where a field label must sit."""
+    """The paragraph's leading plain text (invisible raw HTML skipped): where a field label must sit.
+    It stops at the first token visible_text() would not render as plain text, so it is always a
+    prefix of visible_text(tokens) and a match offset in it is valid there too (neg34 T3 checks)."""
     out = []
     for c in tokens:
         if c.type == "text":
@@ -398,8 +400,8 @@ def raw_html_in(doc: Doc, n: Node) -> bool:
     """Does this block hold raw HTML other than `<!-- comments -->`? Lessons are plain Markdown:
     raw HTML can hide, restyle or swallow what a reader sees, so only comments are allowed."""
     def only_comments(html: str) -> bool:
-        return all((kind == "hidden" and src.startswith("<!--")) or (kind == "text" and not src.strip(WS))
-                   for kind, src, _ in html_segments(html))
+        return all((kind == "hidden" and src.startswith("<!--")) or (kind == "text" and not src.strip(WS))  # blank
+                   for kind, src, _ in html_segments(html))                 # text: the padding of a comment block
     for t in doc.tokens[n.i:n.j + 1]:
         if t.type == "html_block" and not only_comments(t.content):
             return True
@@ -671,7 +673,7 @@ else:
         if not heading_text.strip(WS):
             noh1.append(p.name)
     if noh1:
-        fail("verified:h1", f"first visible block is not an ATX H1 with text (comments and reference definitions ignored; code and raw HTML count): {noh1}")
+        fail("verified:h1", f"first visible block is not an ATX H1 with text (comments and reference definitions ignored; code and raw HTML count as blocks; the H1's text must be Markdown text or code, not text inside raw HTML): {noh1}")
     elif vfiles:
         ok("verified:h1", "every sheet starts with an H1")
 

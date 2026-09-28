@@ -16,9 +16,10 @@ import re  # noqa: E402
 
 # Renderer whitespace that no browser shows: the two libraries place a newline differently
 # right before some block-level tags (`<li>b<pre>` vs `<li>b\n<pre>`, an empty
-# `<blockquote>\n</blockquote>`). Both sides are compared with exactly that newline removed;
-# every other byte must match.
-BLOCK_NL = re.compile(r"\n(?=</?(?:blockquote|pre|ul|ol|li|p|h[1-6]|hr|div|table)[\s/>])|\n(?=<!--)")
+# `<blockquote>\n</blockquote>`). Both sides are compared with exactly that newline removed —
+# never inside <pre>, where a newline is visible; every other byte must match.
+BLOCK_NL = re.compile(r"\n(?=</?(?:blockquote|ul|ol|li|p|h[1-6]|hr|div|table)[\s/>])|\n(?=<pre[\s>])|\n(?=<!--)")
+PRE = re.compile(r"<pre[\s>].*?(?=</pre>)", re.S)   # a newline inside <pre> is visible: never canonicalized
 # Reviewed cases where the REFERENCE departs from the spec text; we follow the spec. Each entry
 # pins OUR exact output (cmark-gfm 0.29.0.gfm.13's output, checked 2026-09-27) and must still differ
 # from the reference, so an entry can neither hide a regression nor outlive its reason.
@@ -35,7 +36,8 @@ ALLOWED = {
 
 
 def canon(html: str) -> str:
-    return BLOCK_NL.sub("", html)
+    inside = [m.span() for m in PRE.finditer(html)]
+    return BLOCK_NL.sub(lambda m: m.group(0) if any(a < m.start() < b for a, b in inside) else "", html)
 
 ref = json.load(open(sys.argv[1], encoding="utf-8"))
 bad, allowed_hit = [], []

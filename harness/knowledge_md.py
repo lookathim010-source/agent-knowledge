@@ -41,26 +41,31 @@ def _reference_999(state, start: int, end: int, silent: bool) -> bool:
     return True
 
 
+# ASCII whitespace: what cmark's `spacechar` and commonmark.js accept inside and after a tag name.
+# Python's `\\s` also matches a NBSP and other Unicode spaces, which neither reference accepts.
+ASCII_WS = "[ \\t\\n\\r\\f\\v]"
+
+
 def _patch_html_blocks() -> None:
     """markdown-it-py 4.0.0 starts a type-4 (declaration) HTML block only for an UPPERCASE letter
     after `<!` — CommonMark 0.31.2 takes any ASCII letter — and uses Python's `\\s`, which also
-    matches a NBSP, where the spec allows only space and tab. Rewrite those start patterns in
-    place (the rule reads the module table at call time). Pinned by cases.json
-    (lowercase-decl, nbsp-after-tag, type7-nbsp)."""
+    matches a NBSP. Rewrite those start patterns in place with ASCII whitespace (the rule reads the
+    module table at call time). Pinned by cases.json (lowercase-decl, nbsp-after-tag, type7-nbsp,
+    ff-after-block-tag, ff-type7-tag, vt-after-block-tag)."""
     seqs = sys.modules["markdown_it.rules_block.html_block"].HTML_SEQUENCES
     for k, (start, end, can_interrupt) in enumerate(seqs):
-        pattern = start.pattern.replace("<![A-Z]", "<![A-Za-z]").replace(r"\s", "[ \t]")
+        pattern = start.pattern.replace("<![A-Z]", "<![A-Za-z]").replace(r"\s", ASCII_WS)
         seqs[k] = (re.compile(pattern, start.flags), end, can_interrupt)
 
 
 def _patch_html_inline() -> None:
     """markdown-it-py 4.0.0 lets Python's `\\s` (which matches a NBSP) separate a raw inline tag's
-    name, attributes and `=`; CommonMark 0.31.2 allows only spaces, tabs and a line ending, so
-    `<span\\xa0a=b>` is literal text (cmark and cmark-gfm agree). Rebuild the inline tag pattern
-    with that whitespace; comments, PIs, declarations and CDATA are unchanged. Pinned by cases.json
-    (nbsp-in-inline-tag)."""
+    name, attributes and `=`; cmark and cmark-gfm take only ASCII whitespace there, so
+    `<span\\xa0a=b>` is literal text. Rebuild the inline tag pattern with ASCII whitespace; comments,
+    PIs, declarations and CDATA are unchanged. Pinned by cases.json (nbsp-in-inline-tag,
+    ff-in-inline-tag, vt-in-inline-tag)."""
     h = sys.modules["markdown_it.common.html_re"]
-    ws = "[ \\t\\n]"
+    ws = ASCII_WS
     attribute = "(?:" + ws + "+" + h.attr_name + "(?:" + ws + "*=" + ws + "*" + h.attr_value + ")?)"
     open_tag = "<[A-Za-z][A-Za-z0-9\\-]*" + attribute + "*" + ws + "*\\/?>"
     close_tag = "<\\/[A-Za-z][A-Za-z0-9\\-]*" + ws + "*>"
@@ -140,7 +145,7 @@ def html_segments(html: str) -> list[tuple[str, str, str]]:
             k = n if k < 0 else k
             end = html[j + 1] == "/"
             out.append(("end" if end else "start", html[j:k], name))
-            if name in ("svg", "math"):                     # `/>` self-closes a foreign START tag only
+            if name in ("svg", "math"):  # `/>` self-closes a foreign start tag; `</svg/>` is just an end tag
                 foreign = max(0, foreign - 1) if end else foreign + (not html[j:k].endswith("/>"))
             if not end and (name in RAWTEXT_TAGS or name == "plaintext"):
                 close = None if name == "plaintext" else re.compile(

@@ -318,5 +318,30 @@
   "id": "comment-block-then-title",
   "markdown": "- <!-- note -->\n  **Own-line comment**\n  - Why it matters here: x\n",
   "why": "a comment alone on the item's first line ends its HTML block; the next line is a Markdown paragraph"
+ },
+ {
+  "id": "ff-in-inline-tag",
+  "markdown": "x <span\fa=b> y\n",
+  "why": "a form feed or vertical tab separates tag parts (cmark spacechar, commonmark.js \\s); only a NBSP does not"
+ },
+ {
+  "id": "vt-in-inline-tag",
+  "markdown": "x <span\u000ba=b> y\n",
+  "why": "a form feed or vertical tab separates tag parts (cmark spacechar, commonmark.js \\s); only a NBSP does not"
+ },
+ {
+  "id": "ff-after-block-tag",
+  "markdown": "<div\fclass=x>\ntext\n",
+  "why": "a form feed or vertical tab separates tag parts (cmark spacechar, commonmark.js \\s); only a NBSP does not"
+ },
+ {
+  "id": "ff-type7-tag",
+  "markdown": "<span\fa=b>\n",
+  "why": "a form feed or vertical tab separates tag parts (cmark spacechar, commonmark.js \\s); only a NBSP does not"
+ },
+ {
+  "id": "vt-after-block-tag",
+  "markdown": "<div\u000bx>\ntext\n",
+  "why": "a form feed or vertical tab separates tag parts (cmark spacechar, commonmark.js \\s); only a NBSP does not"
  }
 ]
