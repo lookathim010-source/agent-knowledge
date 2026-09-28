@@ -1,0 +1,357 @@
+[
+ {
+  "id": "label-999",
+  "markdown": "[aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]: https://x.y\n\n[x][aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]\n",
+  "why": "labels up to 999 characters define a reference"
+ },
+ {
+  "id": "label-1000",
+  "markdown": "[aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]: https://x.y\n\n# H1\n",
+  "why": "a 1000-character label is prose (patched in knowledge_md.py)"
+ },
+ {
+  "id": "angle-inside-destination",
+  "markdown": "[T](https://x.y/<bad>) confidence 80%\n",
+  "why": "< inside a bare destination is allowed"
+ },
+ {
+  "id": "pointy-unclosed",
+  "markdown": "[T](<https://x.y) confidence 80%\n",
+  "why": "an unclosed <destination is not a link"
+ },
+ {
+  "id": "escaped-gt-in-pointy",
+  "markdown": "[docs]: <https://example.com/a\\>b>\n\n[docs]\n",
+  "why": "escaped > inside <…> does not close it"
+ },
+ {
+  "id": "unbalanced-paren-def",
+  "markdown": "[docs]: https://example.com/(oops\n\n# H1\n",
+  "why": "unbalanced ( makes a definition prose"
+ },
+ {
+  "id": "def-title-then-quote",
+  "markdown": "[docs]: https://example.com \"first\"\n\"visible second title\"\n\n# H1\n",
+  "why": "a second quoted line is a paragraph"
+ },
+ {
+  "id": "def-two-line-title",
+  "markdown": "[docs]: https://example.com\n  \"the title\"\n\n[docs]\n",
+  "why": "a title on the next line belongs to the definition"
+ },
+ {
+  "id": "ordered-col0-after-list",
+  "markdown": "- a\n  - b\n2. c\n",
+  "why": "2. at column 0 after a list opens a new list"
+ },
+ {
+  "id": "ordered-inside-field",
+  "markdown": "- a\n  - b\n    2. c\n",
+  "why": "2. inside the item's paragraph is lazy text"
+ },
+ {
+  "id": "ordered-under-paragraph",
+  "markdown": "a\n2. b\n",
+  "why": "2. cannot interrupt a direct paragraph"
+ },
+ {
+  "id": "nbsp-after-heading",
+  "markdown": "## 2026-08-24 \n",
+  "why": "a NBSP is heading content"
+ },
+ {
+  "id": "nbsp-marker",
+  "markdown": "- x\n",
+  "why": "a NBSP after a marker is not a list item"
+ },
+ {
+  "id": "nbsp-only-line",
+  "markdown": "foo\n \nbar\n",
+  "why": "a NBSP-only line is not blank"
+ },
+ {
+  "id": "comment-tail",
+  "markdown": "<!-- hidden -->VISIBLE\n\n# H1\n",
+  "why": "text after a comment block's closer is emitted"
+ },
+ {
+  "id": "lowercase-decl",
+  "markdown": "<!foo> bar\n",
+  "why": "lowercase <!foo> does not start an HTML block"
+ },
+ {
+  "id": "uppercase-decl",
+  "markdown": "<!FOO>\n",
+  "why": "uppercase <!FOO> is a declaration block"
+ },
+ {
+  "id": "hgroup-under-title",
+  "markdown": "- **T**\n  <hgroup>\n  - Why it matters here: x\n",
+  "why": "hgroup is not a type-6 tag"
+ },
+ {
+  "id": "type7-first-in-item",
+  "markdown": "- **T**\n  - <sub>\n    - Why it matters here: x\n    - Do: y\n\n  - Source: z\n",
+  "why": "a complete tag as an item's first content opens a block"
+ },
+ {
+  "id": "quoted-fence",
+  "markdown": "- **T**\n  - Why it matters here: x\n\n  > ```\n  > <!-- alpha -->\n  > ```\n",
+  "why": "a fence inside a block quote"
+ },
+ {
+  "id": "fence-indent-3",
+  "markdown": "- a\n     ```\n        code\n     ```\n",
+  "why": "content keeps indentation beyond the opener's"
+ },
+ {
+  "id": "escaped-comment-opener",
+  "markdown": "x \\<!-- visible -->\n",
+  "why": "an escaped < is literal"
+ },
+ {
+  "id": "even-backslash-backtick",
+  "markdown": "- **a \\\\`**` b**\n",
+  "why": "\\\\ then ` opens a code span"
+ },
+ {
+  "id": "inner-strong-even-backslash",
+  "markdown": "- **alpha\\\\**beta**\n",
+  "why": "\\\\ leaves the inner ** live"
+ },
+ {
+  "id": "setext-in-quote",
+  "markdown": "> Foo\n> ---\n",
+  "why": "a Setext H2 inside a block quote"
+ },
+ {
+  "id": "h2-in-quote",
+  "markdown": "> ## Unexpected\n",
+  "why": "an ATX H2 inside a block quote"
+ },
+ {
+  "id": "cross-line-code-span",
+  "markdown": "- x `a  x\n  b` tail\n",
+  "why": "spaces inside a multi-line code span are kept"
+ },
+ {
+  "id": "empty-h1",
+  "markdown": "# ##\n",
+  "why": "a closing sequence alone leaves an empty H1"
+ },
+ {
+  "id": "escaped-hash-h1",
+  "markdown": "# \\#\n",
+  "why": "an escaped # is H1 text"
+ },
+ {
+  "id": "confidence-attr",
+  "markdown": "x <br title=\"confidence 80%\"> y\n",
+  "why": "attribute text is raw HTML, not prose"
+ },
+ {
+  "id": "nested-fence-no-closer",
+  "markdown": "- a\n  - b\n    ```\n    code\n  - c\n",
+  "why": "a fence ends with its list item"
+ },
+ {
+  "id": "unclosed-comment-in-item",
+  "markdown": "- a\n  - b\n    <!-- open\n  - c\n",
+  "why": "a comment block ends with its list item"
+ },
+ {
+  "id": "upper-pre-blank",
+  "markdown": "<PRE>\nraw\n\nstill raw\n</PRE>\nafter\n",
+  "why": "<PRE> is type 1 (case-insensitive) and survives a blank line"
+ },
+ {
+  "id": "nbsp-after-tag",
+  "markdown": "<div class=x>\ntext\n",
+  "why": "a NBSP after a tag name does not make an HTML block"
+ },
+ {
+  "id": "type7-nbsp",
+  "markdown": "<span a=b>\n",
+  "why": "a NBSP before an attribute does not make a complete tag"
+ },
+ {
+  "id": "lowercase-decl-after-field",
+  "markdown": "- **T**\n  - Do: y\n<!foo> extra\n",
+  "why": "a lowercase declaration interrupts and closes the list"
+ },
+ {
+  "id": "pre-then-code-span",
+  "markdown": "- **T**\n  - Why it matters here: x\n\n    ```\n    x\n    ```\n\n  - Do: `y`A\n",
+  "why": "a fence inside a field item, then an inline code span in the next field"
+ },
+ {
+  "id": "comment-only-field",
+  "markdown": "- **T**\n  - Why it matters here: <!-- hidden -->\n  - Do: y\n",
+  "why": "a field whose only content is an inline comment"
+ },
+ {
+  "id": "comment-block-only-field",
+  "markdown": "- **T**\n  - Do:\n\n    <!-- hidden block -->\n\n  - Source: s\n",
+  "why": "a field whose only content is a comment block"
+ },
+ {
+  "id": "comment-inside-label",
+  "markdown": "- **T**\n  - Why<!-- note --> it matters here: x\n",
+  "why": "an inline comment inside a field label"
+ },
+ {
+  "id": "code-splits-confidence",
+  "markdown": "Source: [T](https://x.y) — A · confi`code`dence 80%\n",
+  "why": "a code span inside the confidence word"
+ },
+ {
+  "id": "image-splits-confidence",
+  "markdown": "Source: [T](https://x.y) — A · confi![i](https://x.y/i.png)dence 80%\n",
+  "why": "an image inside the confidence word"
+ },
+ {
+  "id": "empty-comment-inline",
+  "markdown": "y <!-->A\n",
+  "why": "`<!-->` is a complete inline comment (0.31.2); the text after it is prose"
+ },
+ {
+  "id": "empty-comment-block",
+  "markdown": "<!-->\ntext\n",
+  "why": "a type-2 HTML block that closes on its own line"
+ },
+ {
+  "id": "pi-block-minimal",
+  "markdown": "<?>\ntext\n",
+  "why": "a type-3 HTML block whose `?>` overlaps its opener closes on its own line"
+ },
+ {
+  "id": "cdata-with-gt-inline",
+  "markdown": "y <![CDATA[ a > b ]]>\n",
+  "why": "inline CDATA containing `>` is one raw HTML span"
+ },
+ {
+  "id": "comment-bang-close-inline",
+  "markdown": "y <!-- a --!>A -->\n",
+  "why": "CommonMark ends the inline comment at `-->`, past a `--!>`"
+ },
+ {
+  "id": "textarea-block",
+  "markdown": "<textarea>\na  b\n</textarea>\n",
+  "why": "a type-1 HTML block keeps its inner whitespace verbatim"
+ },
+ {
+  "id": "empty-link-label",
+  "markdown": "Source: [](https://x.y) — A\n",
+  "why": "an empty link text is still a link"
+ },
+ {
+  "id": "whitespace-link-label",
+  "markdown": "[ ](https://x.y)\n",
+  "why": "a whitespace-only link text is still a link"
+ },
+ {
+  "id": "comment-before-title",
+  "markdown": "- <!-- note -->**Commented title**\n  - Why it matters here: x\n",
+  "why": "item content starting with `<!--` is an HTML block: the title is raw text"
+ },
+ {
+  "id": "comment-after-title",
+  "markdown": "- **Commented title**<!-- c -->\n  - Why it matters here: x\n",
+  "why": "an inline comment after the bold title stays inline"
+ },
+ {
+  "id": "hidden-span-confidence",
+  "markdown": "Source: [T](https://x.y) — A <span hidden>confidence 80%</span>\n",
+  "why": "raw inline tags around the confidence label"
+ },
+ {
+  "id": "comment-in-attribute",
+  "markdown": "Do: <input value=\"<!-- A -->\">\n",
+  "why": "a double-quoted attribute value may hold comment-like text"
+ },
+ {
+  "id": "block-tag-in-attribute",
+  "markdown": "Do: <abbr title=\"a <p> b\">y</abbr>\n",
+  "why": "a double-quoted attribute value may hold tag-like text"
+ },
+ {
+  "id": "raw-div-field-value",
+  "markdown": "- Why it matters here:\n\n  <div hidden>x</div>\n",
+  "why": "a type-6 HTML block as a field's only content"
+ },
+ {
+  "id": "script-block-quoted-end",
+  "markdown": "- Do: y\n\n  <script data-end=\"</script>\">\n\n- next\n",
+  "why": "CommonMark ends a type-1 block at `</script>` even inside an attribute"
+ },
+ {
+  "id": "empty-heading-in-field",
+  "markdown": "- Do:\n\n  ###\n",
+  "why": "an empty ATX heading inside a field item"
+ },
+ {
+  "id": "rule-in-field",
+  "markdown": "- Do:\n\n  ***\n",
+  "why": "a thematic break inside a field item"
+ },
+ {
+  "id": "label-glued-to-link",
+  "markdown": "Source: [T](https://x.y)confidence 80%\n",
+  "why": "text directly after a link"
+ },
+ {
+  "id": "link-text-leading-space",
+  "markdown": "Do: x[ y](https://x.y)\n",
+  "why": "a link whose text starts with a space"
+ },
+ {
+  "id": "undefined-reference-is-text",
+  "markdown": "Source: [Title][src] — A · confidence 80%\n",
+  "why": "without its definition a reference link is plain text (how the checker re-reads a Source line)"
+ },
+ {
+  "id": "nbsp-in-inline-tag",
+  "markdown": "x <span a=b> y\n",
+  "why": "a NBSP before an attribute does not make an inline raw tag"
+ },
+ {
+  "id": "comment-block-then-title",
+  "markdown": "- <!-- note -->\n  **Own-line comment**\n  - Why it matters here: x\n",
+  "why": "a comment alone on the item's first line ends its HTML block; the next line is a Markdown paragraph"
+ },
+ {
+  "id": "ff-in-inline-tag",
+  "markdown": "x <span\fa=b> y\n",
+  "why": "a form feed or vertical tab separates tag parts (cmark spacechar, commonmark.js \\s); only a NBSP does not"
+ },
+ {
+  "id": "vt-in-inline-tag",
+  "markdown": "x <span\u000ba=b> y\n",
+  "why": "a form feed or vertical tab separates tag parts (cmark spacechar, commonmark.js \\s); only a NBSP does not"
+ },
+ {
+  "id": "ff-after-block-tag",
+  "markdown": "<div\fclass=x>\ntext\n",
+  "why": "a form feed or vertical tab separates tag parts (cmark spacechar, commonmark.js \\s); only a NBSP does not"
+ },
+ {
+  "id": "ff-type7-tag",
+  "markdown": "<span\fa=b>\n",
+  "why": "a form feed or vertical tab separates tag parts (cmark spacechar, commonmark.js \\s); only a NBSP does not"
+ },
+ {
+  "id": "vt-after-block-tag",
+  "markdown": "<div\u000bx>\ntext\n",
+  "why": "a form feed or vertical tab separates tag parts (cmark spacechar, commonmark.js \\s); only a NBSP does not"
+ },
+ {
+  "id": "comment-block-then-field",
+  "markdown": "- **T**\n  - <!-- note -->\n    Why it matters here: x\n",
+  "why": "a comment alone on a field item's first line ends its HTML block; the label paragraph follows"
+ },
+ {
+  "id": "html-in-image-description",
+  "markdown": "Do: ![<b>x</b>](https://x.y/i.png) y\n",
+  "why": "raw HTML inside an image description is dropped from the alt text"
+ }
+]

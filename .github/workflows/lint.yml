@@ -20,6 +20,19 @@ jobs:
           node-version: 22
       - run: npx --yes markdownlint-cli2@0.23.3 "**/*.md" "#node_modules"
 
+  code:
+    name: shellcheck + pyflakes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # shellcheck is preinstalled on ubuntu-latest runners; .shellcheckrc holds the two reviewed exclusions
+      - run: shellcheck --version | head -2 && shellcheck -s bash harness/tests/*.sh
+      # pyflakes rules only (unused names, undefined names, bad imports); flake8 honors the `noqa` markers
+      - run: pip install flake8==7.3.0 && python3 -m flake8 --select=F harness
+
   knowledge:
     name: check-knowledge.py
     runs-on: ubuntu-latest
@@ -28,4 +41,35 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - run: pip install -r harness/requirements.txt
       - run: python3 harness/check-knowledge.py
+
+  suites:
+    name: negative-test suites
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r harness/requirements.txt
+      - run: bash harness/tests/run.sh
+
+  conformance:
+    name: CommonMark conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: pip install -r harness/requirements.txt html5lib==1.1
+      # The HTML tokenizer the checker uses to find never-displayed markup, against html5lib (WHATWG).
+      - run: python3 harness/conformance/html_oracle.py
+      # The reference implementation and the official spec examples, pinned to CommonMark 0.31.2.
+      - run: npm install --no-save --no-audit --no-fund --prefix "$RUNNER_TEMP/ref" commonmark@0.31.2 commonmark-spec@0.31.2
+      - run: node harness/conformance/reference.cjs "$RUNNER_TEMP/ref/node_modules" > "$RUNNER_TEMP/ref.json"
+      - run: python3 harness/conformance/check.py "$RUNNER_TEMP/ref.json"

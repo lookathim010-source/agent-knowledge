@@ -15,6 +15,13 @@ Written mostly by a machine. The daily.dev MCP connector (Cloudflare Worker
 add verified fact sheets; humans fix typos. Run state (seen-post watermark,
 counters) lives in Cloudflare KV, not here.
 
+> **Status (2026-09-27): the lesson feed is paused.** The scheduled run
+> ("daily-dev-agentic · daily learn") never had the daily.dev connector
+> attached, so from 2026-08-24 it exited early every day while reporting
+> success; T retired it on 2026-09-27. The last lessons are from 2026-08-24.
+> To restart: add the connector in claude.ai (Settings → Connectors → custom
+> connector), enable it on that scheduled task, and switch the task back on.
+
 ## Layout
 
 | Path | What it holds | Written by |
@@ -23,6 +30,9 @@ counters) lives in Cloudflare KV, not here.
 | `lessons/YYYY-MM-DD.md` | The same lessons, one file per day | Connector |
 | `verified/YYYY-MM-DD_topic_vN.md` | Fact sheets verified live in a Claude session, not daily.dev lessons. Revisions bump `vN` | Claude sessions, hand-maintained |
 | `harness/check-knowledge.py` | PASS/FAIL check that the files above still have the shape readers rely on | Run by CI and by sessions |
+| `harness/knowledge_md.py` | The one Markdown parser the checks use: markdown-it-py (CommonMark 0.31.2) plus the patches that align it with the reference | Sessions |
+| `harness/tests/` | 316 negative-test cases: each copies the repo, breaks one thing, and asserts the checker's verdict | Sessions |
+| `harness/conformance/` | Differential gates: the parser must render all 652 CommonMark spec examples and 71 edge cases like the reference implementation, and the HTML tokenizer must split HTML like html5lib | Sessions |
 | `LEDGER.md` | One row per hand-made or session-made change (connector runs are not logged here) | Sessions and hand edits |
 
 ## How a lesson is shaped
@@ -51,12 +61,24 @@ Zero lessons on a quiet day is a valid result; the loop is told never to pad.
 ## Checking it
 
 ```bash
+pip install -r harness/requirements.txt     # markdown-it-py, pinned
 python3 harness/check-knowledge.py          # PASS/FAIL lines
 python3 harness/check-knowledge.py --json   # same, as one JSON object
+bash harness/tests/run.sh                   # the 316 negative-test cases
 ```
 
-CI runs this plus markdownlint on every pull request and on every push to
-`main` (`.github/workflows/lint.yml`). Run it locally before pushing a branch.
+The checker reads Markdown the way CommonMark 0.31.2 does, using a real parser
+rather than pattern matching. Two copies of a lesson count as the same when they
+render to the same visible HTML. Lessons are plain Markdown: raw HTML can
+hide, restyle or swallow what a reader sees, so a lesson holding any raw HTML
+other than a `<!-- comment -->` fails the check. CI runs the checker, the test suites,
+markdownlint, shellcheck, pyflakes and two conformance gates (the Markdown
+parser against the reference implementation, the HTML tokenizer against
+html5lib) on every pull request and every push to `main`
+(`.github/workflows/lint.yml`).
+GitHub itself renders with an older spec (cmark-gfm, 0.29): in rare edge cases,
+such as a lowercase `<!foo>` line, GitHub shows text where 0.31.2 hides a
+declaration.
 
 ## Hand edits
 

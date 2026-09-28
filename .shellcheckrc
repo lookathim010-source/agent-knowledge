@@ -1,0 +1,5 @@
+# shellcheck settings for harness/tests/*.sh (CI runs shellcheck at its default severity).
+# SC2016: the suites pass Python and Markdown in single quotes on purpose; nothing there may expand.
+disable=SC2016
+# SC2001: `sed 's/^/    /'` indents every line of multi-line output; parameter expansion cannot anchor per line.
+disable=SC2001

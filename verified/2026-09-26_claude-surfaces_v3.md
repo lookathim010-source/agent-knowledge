@@ -1,6 +1,4 @@
-# Verified: Claude surfaces — cloud sessions from the chat/Cowork tab vs the Code tab (2026-09-26, corrected 2026-09-27)
-
-> **Superseded by [v3](2026-09-26_claude-surfaces_v3.md) (2026-09-27).** v3 records the rename of the proof repository to `cloud-launch-pad`; nothing else changed.
+# Verified: Claude surfaces — cloud sessions from the chat/Cowork tab vs the Code tab (2026-09-26, corrected and renamed 2026-09-27)
 
 Source: live tool runs in cloud session <https://claude.ai/code/session_01T7N2VsxDrRZPwWM7zdFnuK> — opened from the **chat/Cowork tab**, not the Code tab (T's correction, 2026-09-27; v1 of this sheet mislabelled it) — plus the current Claude Code docs (claude-code-on-the-web, routines, claude-projects, remote-control) and the Cowork scheduled-tasks help article. Not a daily.dev lesson — a session-verified fact sheet.
 
@@ -38,8 +36,10 @@ GitGuardian Security Checks · Kilo Code Review (glm-5.3) · Sourcery (no access
 
 ## Correction trail
 
-- v1 (commit `ef0c3ac`) labelled the session "Code tab" because T tapped **Code** on the where-does-this-chat-live tile by accident. He corrected it on 2026-09-27; v1 is kept with a superseded banner, this v2 carries the fix. The core finding is unchanged and now stronger: the chat/Cowork-tab session did everything natively.
+- v1 (commit `ef0c3ac`) labelled the session "Code tab" because T tapped **Code** on the where-does-this-chat-live tile by accident. He corrected it on 2026-09-27; v1 is kept with a superseded banner, and v2 carried the fix. The core finding is unchanged and now stronger: the chat/Cowork-tab session did everything natively.
+
+- v3 (2026-09-27): the proof repository was renamed to `cloud-launch-pad` at T's request; only the Proof artifact line changed.
 
 ## Proof artifact
 
-lookathim010-source/Claude-Code-Android-App-FULL-ACCESS-ENV-Anthropic-cloud — branch `claude-chat-capability-proof`, commit 9ee5237, PR #1 (merged by T).
+lookathim010-source/cloud-launch-pad (named Claude-Code-Android-App-FULL-ACCESS-ENV-Anthropic-cloud until 2026-09-27; GitHub redirects the old URL) — branch `claude-chat-capability-proof`, commit 9ee5237, PR #1 (merged by T).

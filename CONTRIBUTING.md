@@ -27,12 +27,19 @@ verified fact sheets and fix things. These rules keep them from colliding.
 - Hand or session changes go on `claude/<topic>` and land through a pull
   request. Connector commits are the one exception.
 - The PR body says what changed, pastes the `check-knowledge.py` result, and
-  names the risk.
+  names the risk. A change under `harness/` also pastes `bash harness/tests/run.sh`;
+  a change to `harness/knowledge_md.py` or the markdown-it-py pin must keep the
+  conformance gate green (see the `conformance` job in `.github/workflows/lint.yml`).
+- Found a Markdown shape the checker gets wrong? Render it with the reference
+  implementation (commonmark.js 0.31.2) first, then add it to
+  `harness/conformance/cases.json` and a failing case to `harness/tests/` before fixing.
 - Merge only on green CI.
 
 ## Ledger
 
 Every hand or session change adds one row to `LEDGER.md` (newest first).
+A row written inside its own pull request says `open`; the next ledger change
+flips it to `merged` or `closed` with the merge commit.
 Connector runs are not logged there; their trail is the git history of
 `knowledge.md`.
 
