@@ -179,9 +179,10 @@ class Doc:
         out: list[str] = []
         for t in self.tokens:
             if t.type == "fence" and t.map[1] >= self.n_lines:
-                last = self.lines[t.map[1] - 1] if t.map[1] - 1 > t.map[0] else ""
-                closer = r"[ \t>]*" + re.escape(t.markup[0]) + "{%d,}[ \t]*" % len(t.markup)
-                if not re.fullmatch(closer, last):
+                # the parser's own verdict: a closed fence spans opener + content + closer lines, an open
+                # one only opener + content (a would-be closer indented too far, or in the wrong
+                # container, is content)
+                if (t.map[1] - t.map[0]) - 1 - len(t.content.splitlines()) < 1:
                     out.append(f"fenced code block opened with {t.markup} never closes")
             elif t.type == "html_block":
                 c, msg = t.content.lstrip(" "), None

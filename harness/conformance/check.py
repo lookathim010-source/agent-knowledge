@@ -19,7 +19,7 @@ import re  # noqa: E402
 # `<blockquote>\n</blockquote>`). Both sides are compared with exactly that newline removed —
 # never inside <pre>, where a newline is visible; every other byte must match.
 BLOCK_NL = re.compile(r"\n(?=</?(?:blockquote|ul|ol|li|p|h[1-6]|hr|div|table)[\s/>])|\n(?=<pre[\s>])|\n(?=<!--)")
-PRE = re.compile(r"<pre[\s>].*?(?=</pre>)", re.S)   # a newline inside <pre> is visible: never canonicalized
+PRE = re.compile(r"<pre[\s>].*?(?=</pre>)", re.S | re.I)   # a newline inside <pre> is visible: never canonicalized
 # Reviewed cases where the REFERENCE departs from the spec text; we follow the spec. Each entry
 # pins OUR exact output (cmark-gfm 0.29.0.gfm.13's output, checked 2026-09-27) and must still differ
 # from the reference, so an entry can neither hide a regression nor outlive its reason.
