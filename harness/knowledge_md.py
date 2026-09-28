@@ -122,8 +122,8 @@ def html_segments(html: str) -> list[tuple[str, str, str]]:
             k = n if k < 0 else k
             end = html[j + 1] == "/"
             out.append(("end" if end else "start", html[j:k], name))
-            if name in ("svg", "math") and not html[j:k].endswith("/>"):
-                foreign = max(0, foreign - 1) if end else foreign + 1
+            if name in ("svg", "math"):                     # `/>` self-closes a foreign START tag only
+                foreign = max(0, foreign - 1) if end else foreign + (not html[j:k].endswith("/>"))
             if not end and (name in RAWTEXT_TAGS or name == "plaintext"):
                 close = None if name == "plaintext" else re.compile(
                     r"</" + re.escape(name) + r"[\t\n\f\r />]", re.I).search(html, k)

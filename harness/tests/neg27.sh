@@ -62,7 +62,9 @@ pos "K3++ same-definition-case-insensitive" t3c
 t4() { both 'LESSON=["- **Attr conf**","  - Why it matters here: x","  - Do: y","  - Source: [T](https://x.y) — A <br title=\"confidence 80%\">"]'"$INS"; }
 run "K4 confidence-in-attribute" "source line is not" t4
 t4b() { both 'LESSON=["- **Tag then conf**","  - Why it matters here: x","  - Do: y","  - Source: [T](https://x.y) — A <br> confidence 80%"]'"$INS"; }
-pos "K4+ visible-confidence-after-tag" t4b
+# CHANGED 2026-09-27 (raw-HTML ban, T's decision on PR #2): this lesson carries raw HTML other than a
+# comment, so it now FAILs whatever the HTML does; the parse this case pinned no longer decides the verdict.
+run "K4+ visible-confidence-after-tag -> raw-html-now-fails" "raw HTML in a lesson" t4b
 
 echo "----"
 echo "RESULT: $([ $bad -eq 0 ] && echo PASS || echo FAIL) — $((n-bad)) pass, $bad fail ($n cases)"

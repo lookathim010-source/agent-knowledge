@@ -40,7 +40,9 @@ run "P1++ do-only-inside-template" "missing or empty do" t1c
 t1d() { both 'LESSON=["- **Block why**","  - Why it matters here:","","    <div hidden>x</div>","","  - Do: y",'"$F"']'"$INS"; }
 run "P1+++ why-only-a-raw-html-block" "missing or empty why" t1d
 t1e() { both 'LESSON=["- **Kbd do**","  - Why it matters here: x","  - Do: press <kbd>Ctrl</kbd> twice",'"$F"']'"$INS"; }
-pos "P1++++ text-beside-raw-html-counts" t1e
+# CHANGED 2026-09-27 (raw-HTML ban, T's decision on PR #2): this lesson carries raw HTML other than a
+# comment, so it now FAILs whatever the HTML does; the browser behaviour it pinned no longer decides the verdict.
+run "P1++++ text-beside-raw-html-counts -> raw-html-now-fails" "raw HTML in a lesson" t1e
 t1f() { both 'LESSON=["- **Hidden title**","  - Why it matters here: x","  - Do: y","  - Source: [<span hidden>T</span>](https://x.y) — A · confidence 80%"]'"$INS"; }
 run "P1+++++ link-title-only-inside-raw-html" "source line is not" t1f
 

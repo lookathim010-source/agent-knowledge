@@ -43,7 +43,9 @@ pos "J1++ prose-spaces-still-collapse" t1c
 # J2 (4116180191): the opener's 0-3 spaces of indentation are not payload
 t2() { split 'LESSON=["- **Html indent**","  - Why it matters here: x","","    <div>same</div>","  - Do: y",'"$F"']'"$INS" \
              'LESSON=["- **Html indent**","  - Why it matters here: x","","      <div>same</div>","  - Do: y",'"$F"']'"$INS"; }
-pos "J2 html-opener-indent-ignored" t2
+# CHANGED 2026-09-27 (raw-HTML ban, T's decision on PR #2): this lesson carries raw HTML other than a
+# comment, so it now FAILs whatever the HTML does; the parse this case pinned no longer decides the verdict.
+run "J2 html-opener-indent-ignored -> raw-html-now-fails" "raw HTML in a lesson" t2
 t2b() { split 'LESSON=["- **Html indent**","  - Why it matters here: x","","    <div>same</div>","  - Do: y",'"$F"']'"$INS" \
               'LESSON=["- **Html indent**","  - Why it matters here: x","","    <div>other</div>","  - Do: y",'"$F"']'"$INS"; }
 run "J2+ html-content-still-compared" "same title, different content" t2b

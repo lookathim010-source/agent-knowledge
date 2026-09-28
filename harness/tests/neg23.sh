@@ -71,7 +71,9 @@ t4() { split 'LESSON=["- **Html lesson**","  - Why it matters here: x","","    <
 run "G4 nested-html-block-counts" "same title, different content" t4
 # G4+ same block in both copies → PASS
 t4b() { both 'LESSON=["- **Html lesson**","  - Why it matters here: x","","    <div>same in both</div>","  - Do: y",'"$F"']'"$INS"; }
-pos "G4+ nested-html-block-both" t4b
+# CHANGED 2026-09-27 (raw-HTML ban, T's decision on PR #2): this lesson carries raw HTML other than a
+# comment, so it now FAILs whatever the HTML does; the parse this case pinned no longer decides the verdict.
+run "G4+ nested-html-block-both -> raw-html-now-fails" "raw HTML in a lesson" t4b
 # G4++ nested fenced code with different content differs too (readers see the code)
 t4c() { split 'LESSON=["- **Code lesson**","  - Why it matters here: x","    ```","    print(1)","    ```","  - Do: y",'"$F"']'"$INS" \
               'LESSON=["- **Code lesson**","  - Why it matters here: x","    ```","    print(2)","    ```","  - Do: y",'"$F"']'"$INS"; }

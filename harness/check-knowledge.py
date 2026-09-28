@@ -8,7 +8,8 @@ has the shape every reader relies on:
                  (real calendar dates, no repeats, no other H2s) newest first; every top-level
                  bullet in a section is a bold lesson with a non-empty
                  "Why it matters here:", a non-empty "Do:", and a "Source:"
-                 line carrying a link and a 0-100 confidence; a bullet
+                 line carrying a link and a 0-100 confidence, written in plain
+                 Markdown (raw HTML other than <!-- comments --> FAILs); a bullet
                  outside every day section is a FAIL (readers never see it), and so
                  is any other visible top-level block inside a day section (a
                  paragraph, heading, rule, code or raw HTML — no day file carries it)
@@ -27,9 +28,10 @@ render to the same HTML once markup a browser never displays (comments, processi
 instructions, declarations, CDATA) is removed — found by a browser-faithful HTML
 tokenizer that CI checks against html5lib — and text whitespace is collapsed the way a
 browser does outside <pre> and <code> (not at all when the lesson holds raw HTML that
-shows whitespace as written). Raw HTML can hide what it wraps, so text inside a raw
-HTML element, or a raw HTML block, never counts as a Why / Do / Source value, a source
-link title or a confidence label.
+shows whitespace as written). Raw HTML can hide, restyle or swallow what a reader
+sees, so a lesson holding any raw HTML other than a comment FAILs outright; the
+visibility rules that remain (text inside raw HTML never counts as a value) only shape
+the extra diagnostics such a lesson gets.
 
 Contract: one line per check (PASS|WARN|FAIL name evidence), final RESULT
 line, exit 0 only when nothing FAILed. `--json` prints one JSON object.
@@ -291,11 +293,12 @@ def raw_step(stack: list[str], c) -> None:
             stack.pop()
 
 
-def visible_text(tokens) -> str:
+def visible_text(tokens, code_text: bool = False) -> str:
     """The text a reader is sure to see in a run of inline tokens. Formatting delimiters and
-    never-displayed markup are zero-width; line breaks read as a space; code and images become SEP.
-    A raw HTML tag, and everything inside a raw HTML element (it may be `hidden`, a template, or
-    styled away), becomes SPLIT: it splits words but never counts as a value."""
+    never-displayed markup are zero-width; line breaks read as a space; code and images become SEP
+    (code becomes its own text with code_text). A raw HTML tag, and everything inside a raw HTML
+    element (it may be `hidden`, a template, or styled away), becomes SPLIT: it splits words but
+    never counts as a value."""
     out: list[str] = []
     depth: list[str] = []
     for c in tokens:
@@ -309,6 +312,8 @@ def visible_text(tokens) -> str:
             out.append(c.content)
         elif c.type in ("softbreak", "hardbreak"):
             out.append(" ")
+        elif c.type == "code_inline" and code_text:
+            out.append(c.content)
         elif c.type in ("code_inline", "image"):
             out.append(SEP)
     return "".join(out)
@@ -369,7 +374,7 @@ def title_of(inline) -> tuple[str | None, bool]:
                 break
     if end is None:
         return None, False
-    title = visible_text(ch[1:end]).replace(SPLIT, "").replace(SEP, "")   # what a reader sees in the bold span
+    title = visible_text(ch[1:end], code_text=True).replace(SPLIT, "").replace(SEP, "")   # what a reader sees
     rest = ch[end + 1:]
     if rest and rest[0].type not in ("softbreak", "hardbreak"):
         return None, False                        # `**a** b **c**`, `**foo***`: not one bold span
@@ -387,9 +392,25 @@ def has_value(doc: Doc, n: Node) -> bool:
     return False
 
 
+def raw_html_in(doc: Doc, n: Node) -> bool:
+    """Does this block hold raw HTML other than `<!-- comments -->`? Lessons are plain Markdown:
+    raw HTML can hide, restyle or swallow what a reader sees, so only comments are allowed."""
+    def only_comments(html: str) -> bool:
+        return all((kind == "hidden" and src.startswith("<!--")) or (kind == "text" and not src.strip(WS))
+                   for kind, src, _ in html_segments(html))
+    for t in doc.tokens[n.i:n.j + 1]:
+        if t.type == "html_block" and not only_comments(t.content):
+            return True
+        if t.type == "inline" and any(c.type == "html_inline" and not only_comments(c.content) for c in t.children):
+            return True
+    return False
+
+
 def parse_lesson(doc: Doc, item: Node) -> dict:
     """{title, problems, key, parts} for one top-level list item of a day section."""
     lesson = {"problems": [], "key": doc.html(item), "parts": {}, "seen": {k: False for k in FIELDS}}
+    if raw_html_in(doc, item):
+        lesson["problems"].append("raw HTML in a lesson (only <!-- comments --> are allowed)")
     head = item.kids[0] if item.kids and item.kids[0].kind == "paragraph" else None
     title, continues = title_of(head.kids[0].t) if head and item.t.markup == "-" else (None, False)
     if title is None:

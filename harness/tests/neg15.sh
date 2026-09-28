@@ -44,7 +44,9 @@ t2() { both 'LESSON=["- **Split by div**","  - Why it matters here: x","<div>bou
 run "2 html-block-splits" "missing do" t2
 # 2b. a type-7 tag (`<span>`) directly under the paragraph is lazy continuation -> PASS
 t2b() { both 'LESSON=["- **Span ok**","  - Why it matters here: x","<span>note</span>","  - Do: y","'"$F"'"]'"$INS"; }
-pos "2b type7-tag-is-lazy-continuation" t2b
+# CHANGED 2026-09-27 (raw-HTML ban, T's decision on PR #2): this lesson carries raw HTML other than a
+# comment, so it now FAILs whatever the HTML does; the parse this case pinned no longer decides the verdict.
+run "2b type7-tag-is-lazy-continuation -> raw-html-now-fails" "raw HTML in a lesson" t2b
 
 # 3. a 10-digit "ordered marker" is a paragraph, not a list item -> PASS
 t3() { both 'LESSON=["- **Complete**","'"$L3"',"","1234567890. This is an identifier",""]'"$INS"; }

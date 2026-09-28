@@ -42,7 +42,9 @@ t1c() { split 'LESSON=["- **Block textarea**","  - Why it matters here: x","  - 
               'LESSON=["- **Block textarea**","  - Why it matters here: x","  - Do: y","","    <textarea>","    a   b","    </textarea>","",'"$F"']'"$INS"; }
 run "N1++ textarea-block-whitespace-is-visible" "same title, different content" t1c
 t1d() { both 'LESSON=["- **Textarea**","  - Why it matters here: x","  - Do: type <textarea>a  b</textarea>",'"$F"']'"$INS"; }
-pos "N1+++ identical-textarea-copies-pass" t1d
+# CHANGED 2026-09-27 (raw-HTML ban, T's decision on PR #2): this lesson carries raw HTML other than a
+# comment, so it now FAILs whatever the HTML does; the browser behaviour it pinned no longer decides the verdict.
+run "N1+++ identical-textarea-copies-pass -> raw-html-now-fails" "raw HTML in a lesson" t1d
 
 # N3 (4117161124): a source link needs visible link text
 t3() { both 'LESSON=["- **Empty label**","  - Why it matters here: x","  - Do: y","  - Source: [](https://x.y) — A · confidence 80%"]'"$INS"; }
